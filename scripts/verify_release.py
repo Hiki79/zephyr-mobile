@@ -20,6 +20,8 @@ for line in mapping.splitlines():
         orig, target = line.split(" -> ")
         target = target.removesuffix(":")
         if orig.startswith("org.yaml.snakeyaml."):
+            if target.startswith("R8$$REMOVED$$CLASS") or "REMOVED" in target:
+                continue
             retained_snakeyaml_count += 1
             if not target.startswith("org.yaml.snakeyaml."):
                 raise RuntimeError(f"Package removed for {orig} -> {target}")
