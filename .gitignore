@@ -1,0 +1,17 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+.kotlin/
+
+# Built by CI with gomobile; never committed.
+app/libs/*.aar
+
+# Signing material must never enter the repository.
+*.jks
+*.p12
+*.keystore
+keystore.properties
+signing.properties

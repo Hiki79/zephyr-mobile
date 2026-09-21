@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compose paints everything; this theme only has to keep the system from
+      flashing its own colours before the first frame. The paper tone matches
+      the desktop build's canvas.
+    -->
+    <style name="Theme.Zephyr" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FBFBF8</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

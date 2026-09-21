@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zephyr</string>
+    <string name="channel_status">代理状态</string>
+    <string name="notif_connecting">正在连接</string>
+    <string name="notif_connected">代理运行中</string>
+    <string name="notif_subtitle">流量正在经过 Zephyr</string>
+    <string name="notif_stop">断开</string>
+</resources>
