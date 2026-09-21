@@ -83,7 +83,9 @@ object ZephyrState {
     private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toasts: SharedFlow<String> = _toasts.asSharedFlow()
 
-    private var pollJobs: MutableList<Job> = mutableListOf()
+    // Touched from the main thread and from the service's IO coroutine, so
+    // every access goes through the lock below.
+    private val pollJobs = mutableListOf<Job>()
 
     fun init(context: Context) {
         if (::store.isInitialized) return
@@ -167,8 +169,9 @@ object ZephyrState {
     private fun startPolling() {
         stopPolling()
         val api = api()
+        val jobs = mutableListOf<Job>()
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             api.trafficFlow()
                 .catch { }
                 .collect { sample ->
@@ -176,11 +179,11 @@ object ZephyrState {
                 }
         }
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             api.memoryFlow().catch { }.collect { _memory.value = it.inUse }
         }
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             api.logFlow(_settings.value.logLevel)
                 .catch { }
                 .collect { line ->
@@ -194,7 +197,7 @@ object ZephyrState {
         }
 
         // Version confirms the core is really answering, not just launched.
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             repeat(20) {
                 val version = api.version()
                 if (version != null) {
@@ -205,32 +208,42 @@ object ZephyrState {
             }
         }
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             while (isActive) {
                 _proxies.value = api.proxies()
                 delay(6_000)
             }
         }
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             while (isActive) {
                 _connections.value = api.connections()
                 delay(3_000)
             }
         }
 
-        pollJobs += scope.launch {
+        jobs += scope.launch {
             _rules.value = api.rules()
         }
+
+        synchronized(pollJobs) { pollJobs += jobs }
     }
 
     private fun stopPolling() {
-        pollJobs.forEach(Job::cancel)
-        pollJobs = mutableListOf()
+        val stale = synchronized(pollJobs) {
+            val copy = pollJobs.toList()
+            pollJobs.clear()
+            copy
+        }
+        stale.forEach(Job::cancel)
     }
 
     fun refreshProxies() {
         scope.launch { _proxies.value = api().proxies() }
+    }
+
+    fun refreshRules() {
+        scope.launch { _rules.value = api().rules() }
     }
 
     fun pushLog(text: String, level: LogLevel) {

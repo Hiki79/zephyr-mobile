@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import dev.zephyr.mobile.ZephyrState
 import dev.zephyr.mobile.data.LogLevel
 import dev.zephyr.mobile.ui.EmptyState
+import dev.zephyr.mobile.ui.HairLine
 import dev.zephyr.mobile.ui.MonoSmall
 import dev.zephyr.mobile.ui.PageHeader
 import dev.zephyr.mobile.ui.Z
@@ -51,7 +52,7 @@ fun LogsScreen() {
 
     Column(Modifier.fillMaxWidth().padding(horizontal = Z.gutter)) {
         PageHeader(
-            kicker = "04 / LOGS",
+            kicker = "06 / LOGS",
             title = "日志",
             subtitle = "内核实时输出 · 只保留最近 600 行，不写入文件",
             trailing = {
@@ -74,7 +75,7 @@ fun LogsScreen() {
                 Spacer(Modifier.width(7.dp))
                 ZSwitch(checked = follow, onChange = { follow = it })
             }
-            dev.zephyr.mobile.ui.HairLine()
+            HairLine()
 
             if (logs.isEmpty()) {
                 EmptyState(

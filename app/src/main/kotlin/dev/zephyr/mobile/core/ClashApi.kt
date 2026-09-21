@@ -81,15 +81,6 @@ class ClashApi(private val port: Int, private val secret: String) {
     suspend fun selectNode(group: String, node: String): Boolean =
         send("/proxies/${encode(group)}", "PUT", """{"name":${quote(node)}}""")
 
-    /** Latency of one node in milliseconds, or null when it timed out. */
-    suspend fun nodeDelay(name: String, testUrl: String, timeoutMillis: Int = 5000): Int? {
-        val path = "/proxies/${encode(name)}/delay?timeout=$timeoutMillis&url=${encode(testUrl)}"
-        val body = text(path, readTimeoutSeconds = (timeoutMillis / 1000L) + 4) ?: return null
-        return runCatching {
-            json.decodeFromString<JsonObject>(body)["delay"]?.jsonPrimitive?.content?.toInt()
-        }.getOrNull()
-    }
-
     /** Tests a whole group at once; the core returns a name to latency map. */
     suspend fun groupDelay(group: String, testUrl: String, timeoutMillis: Int = 5000): Map<String, Int> {
         val path = "/group/${encode(group)}/delay?timeout=$timeoutMillis&url=${encode(testUrl)}"

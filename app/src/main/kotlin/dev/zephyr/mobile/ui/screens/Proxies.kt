@@ -44,6 +44,7 @@ import dev.zephyr.mobile.ui.DelayDot
 import dev.zephyr.mobile.ui.DelayPill
 import dev.zephyr.mobile.ui.EmptyState
 import dev.zephyr.mobile.ui.HairLine
+import dev.zephyr.mobile.ui.MonoSmall
 import dev.zephyr.mobile.ui.PageHeader
 import dev.zephyr.mobile.ui.Z
 import dev.zephyr.mobile.ui.ZButton
@@ -238,10 +239,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
                     ) {
                         Text(
                             code,
-                            style = dev.zephyr.mobile.ui.MonoSmall.copy(
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                            ),
+                            style = MonoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
                             color = Z.muted,
                         )
                     }
@@ -254,7 +252,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
                             if (measured.isNotEmpty()) append(" · 平均 ${measured.average().toInt()} ms")
                         },
                         fontSize = 11.5.sp,
-                        color = Z.faint,
+                        color = Z.muted,
                     )
                 }
             }
@@ -275,7 +273,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
             Text(
                 "显示 $visibleCount / ${active?.all?.size ?: 0} 个节点 · 150 ms 以内为绿，300 ms 以内为橙",
                 fontSize = 11.5.sp,
-                color = Z.faint,
+                color = Z.muted,
                 modifier = Modifier.padding(vertical = 6.dp),
             )
         }
@@ -351,8 +349,8 @@ private fun NodeRow(
             )
             Text(
                 nodeMeta(name, type),
-                fontSize = 11.sp,
-                color = Z.faint,
+                fontSize = 11.5.sp,
+                color = Z.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,9 +51,12 @@ import dev.zephyr.mobile.selectGroups
 import dev.zephyr.mobile.ui.CardFoot
 import dev.zephyr.mobile.ui.CardHeader
 import dev.zephyr.mobile.ui.DelayPill
+import dev.zephyr.mobile.ui.EmptyState
 import dev.zephyr.mobile.ui.HairLine
+import dev.zephyr.mobile.ui.KickerStyle
 import dev.zephyr.mobile.ui.PageHeader
 import dev.zephyr.mobile.ui.SectionLabel
+import dev.zephyr.mobile.ui.Segmented
 import dev.zephyr.mobile.ui.Tag
 import dev.zephyr.mobile.ui.Z
 import dev.zephyr.mobile.ui.ZButton
@@ -79,22 +85,12 @@ fun OverviewScreen(
     val memory by ZephyrState.memory.collectAsState()
     val profiles by ZephyrState.profiles.collectAsState()
 
-    // The uptime line has to tick without the store churning every second.
-    var tick by remember { mutableStateOf(0) }
-    LaunchedEffect(status.startedAt) {
-        while (true) {
-            delay(1000)
-            tick++
-        }
-    }
-
     var picking by remember { mutableStateOf(false) }
 
     val groups = remember(proxies) { selectGroups(proxies) }
     val pinned = settings.pinnedGroups
     val summary = remember(groups, pinned) {
-        if (pinned.isEmpty()) groups.take(DEFAULT_SUMMARY)
-        else groups.filter { pinned.contains(it.name) }
+        if (pinned.isEmpty()) groups.take(DEFAULT_SUMMARY) else groups.filter { it.name in pinned }
     }
     val currentProfile = profiles.find { it.uid == settings.currentProfile }
 
@@ -115,7 +111,7 @@ fun OverviewScreen(
                             CoreStage.STARTING -> "正在启动"
                             CoreStage.FAILED -> status.lastError ?: "启动失败"
                             CoreStage.STOPPED -> "未连接"
-                        }
+                        },
                     )
                 },
             )
@@ -153,7 +149,7 @@ fun OverviewScreen(
                     },
                     active = true,
                 ) {
-                    dev.zephyr.mobile.ui.Segmented(
+                    Segmented(
                         value = settings.mode,
                         options = listOf("rule" to "规则", "global" to "全局", "direct" to "直连"),
                         onChange = ZephyrState::setMode,
@@ -168,8 +164,8 @@ fun OverviewScreen(
                 totalDown = connections.downloadTotal,
                 totalUp = connections.uploadTotal,
                 memory = memory,
-                // Reading tick here is what re-renders the uptime each second.
-                uptime = if (status.running && tick >= 0) formatUptime(status.startedAt) else "未启动",
+                running = status.running,
+                startedAt = status.startedAt,
                 onOpenConnections = onNavigateConnections,
             )
         }
@@ -185,15 +181,13 @@ fun OverviewScreen(
                         "点一行换节点 · 显示的是你选的分组"
                     },
                     trailing = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            ZButton(
-                                "选择",
-                                onClick = { picking = true },
-                                icon = ZIcon.ListChecks,
-                                small = true,
-                                enabled = groups.isNotEmpty(),
-                            )
-                        }
+                        ZButton(
+                            "选择",
+                            onClick = { picking = true },
+                            icon = ZIcon.ListChecks,
+                            small = true,
+                            enabled = groups.isNotEmpty(),
+                        )
                     },
                 )
 
@@ -227,7 +221,7 @@ fun OverviewScreen(
         if (currentProfile == null) {
             item {
                 ZCard {
-                    dev.zephyr.mobile.ui.EmptyState(
+                    EmptyState(
                         icon = ZIcon.Download,
                         title = "先添加一个订阅",
                         description = "添加机场给的 Clash 订阅地址之后，就可以连接了。",
@@ -288,11 +282,7 @@ private fun HeroCard(traffic: List<TrafficSample>, stage: CoreStage, port: Int) 
                 ),
             )
             Spacer(Modifier.width(9.dp))
-            Text(
-                "NETWORK / LIVE",
-                style = dev.zephyr.mobile.ui.KickerStyle,
-                color = Color.White.copy(alpha = 0.72f),
-            )
+            Text("NETWORK / LIVE", style = KickerStyle, color = Color.White.copy(alpha = 0.72f))
             Spacer(Modifier.weight(1f))
             Text("最近 60 秒", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.6f))
         }
@@ -301,12 +291,7 @@ private fun HeroCard(traffic: List<TrafficSample>, stage: CoreStage, port: Int) 
 
         Row {
             RateBlock(ZIcon.ArrowDown, "下载速率", downValue, downUnit, Modifier.weight(1f))
-            Box(
-                Modifier
-                    .width(1.dp)
-                    .height(44.dp)
-                    .background(Color.White.copy(alpha = 0.22f)),
-            )
+            Box(Modifier.width(1.dp).height(44.dp).background(Color.White.copy(alpha = 0.22f)))
             Spacer(Modifier.width(18.dp))
             RateBlock(ZIcon.ArrowUp, "上传速率", upValue, upUnit, Modifier.weight(1f))
         }
@@ -333,7 +318,7 @@ private fun HeroCard(traffic: List<TrafficSample>, stage: CoreStage, port: Int) 
 
 @Composable
 private fun RateBlock(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
     value: String,
     unit: String,
@@ -422,14 +407,14 @@ private fun TrafficChart(samples: List<TrafficSample>, modifier: Modifier) {
 
 @Composable
 private fun ControlRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     subtitle: String,
     active: Boolean,
     trailing: @Composable () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -457,15 +442,30 @@ private fun ControlRow(
     }
 }
 
+/**
+ * Keeps its own one-second clock so the uptime line ticks without anything
+ * upstream re-rendering; the counters it shows come from the store.
+ */
 @Composable
 private fun ActivityCard(
     connectionCount: Int,
     totalDown: Long,
     totalUp: Long,
     memory: Long,
-    uptime: String,
+    running: Boolean,
+    startedAt: Long,
     onOpenConnections: () -> Unit,
 ) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(running) {
+        while (running) {
+            delay(1000)
+            now = System.currentTimeMillis()
+        }
+    }
+    // Reading `now` is what schedules the recomposition each second.
+    val uptime = if (running && now > 0) formatUptime(startedAt) else "未启动"
+
     ZCard {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 13.dp),
@@ -474,13 +474,13 @@ private fun ActivityCard(
             SectionLabel("ACTIVITY", Modifier.weight(1f))
             Box(
                 Modifier
-                    .size(26.dp)
+                    .size(32.dp)
                     .background(Z.card, RoundedCornerShape(Z.radiusSm))
                     .border(1.dp, Z.lineDark, RoundedCornerShape(Z.radiusSm))
-                    .clickable(onClick = onOpenConnections),
+                    .clickable(role = Role.Button, onClick = onOpenConnections),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(ZIcon.ChevronRight, null, tint = Z.ink, modifier = Modifier.size(13.dp))
+                Icon(ZIcon.ChevronRight, "查看连接", tint = Z.ink, modifier = Modifier.size(14.dp))
             }
         }
         Row(
@@ -509,16 +509,12 @@ private fun ActivityCard(
 }
 
 @Composable
-private fun ActivityRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String,
-) {
+private fun ActivityRow(icon: ImageVector, label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, null, tint = Z.faint, modifier = Modifier.size(15.dp))
+        Icon(icon, null, tint = Z.muted, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(10.dp))
         Text(label, fontSize = 13.sp, color = Z.muted, modifier = Modifier.weight(1f))
         Text(value, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Z.ink)
@@ -528,7 +524,10 @@ private fun ActivityRow(
 @Composable
 private fun GroupRow(group: ProxyItem, chain: String, latency: Int?, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 11.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(ZIcon.Route, null, tint = Z.blue, modifier = Modifier.size(15.dp))

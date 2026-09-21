@@ -1,8 +1,7 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-
+// AGP 9 compiles Kotlin itself, so org.jetbrains.kotlin.android is not applied;
+// the two compiler plugins below still are, and jvmTarget follows compileOptions.
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
@@ -87,12 +86,6 @@ android {
     lint {
         abortOnError = false
         checkReleaseBuilds = false
-    }
-}
-
-kotlin {
-    compilerOptions {
-        jvmTarget.set(JvmTarget.JVM_17)
     }
 }
 

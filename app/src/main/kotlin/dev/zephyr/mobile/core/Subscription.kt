@@ -31,8 +31,15 @@ object Subscription {
     suspend fun fetch(url: String, uid: String, store: Store, keepName: String? = null): Profile =
         withContext(Dispatchers.IO) {
             val trimmed = url.trim()
-            if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
-                throw FetchError("订阅地址需要以 http:// 或 https:// 开头")
+            // A subscription body holds every node's password. Over plain HTTP
+            // anyone on the path reads it, so the network security config blocks
+            // cleartext to all hosts but loopback; this check only turns that
+            // socket-level refusal into a message the user can act on.
+            if (trimmed.startsWith("http://", ignoreCase = true)) {
+                throw FetchError("订阅地址必须是 https://，明文 http 会把节点密码暴露在路上")
+            }
+            if (!trimmed.startsWith("https://", ignoreCase = true)) {
+                throw FetchError("订阅地址需要以 https:// 开头")
             }
 
             val request = Request.Builder()

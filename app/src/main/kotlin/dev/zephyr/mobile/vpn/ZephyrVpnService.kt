@@ -29,12 +29,18 @@ import kotlinx.coroutines.withContext
  * Owns the tunnel. Android hands a file descriptor to whoever calls establish();
  * that descriptor is the one thing mihomo cannot obtain for itself, so this
  * service exists to open it, pass it down, and keep the process alive.
+ *
+ * Descriptor ownership is one-directional: once detached and handed to the
+ * core it belongs to the core, which closes it on stop or on an early failure.
+ * Nothing here closes it, so there is never a second owner.
  */
 class ZephyrVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var tunnel: ParcelFileDescriptor? = null
-    private var starting = false
+
+    @Volatile private var coreUp = false
+
+    @Volatile private var starting = false
 
     /**
      * Every socket the core opens comes through here. Without this the core's
@@ -55,7 +61,7 @@ class ZephyrVpnService : VpnService() {
         // notification within a few seconds or the system kills the process.
         goForeground(getString(R.string.notif_connecting), null)
 
-        if (tunnel == null && !starting) {
+        if (!coreUp && !starting) {
             starting = true
             scope.launch { bringUp() }
         }
@@ -72,16 +78,18 @@ class ZephyrVpnService : VpnService() {
                 return
             }
 
-        val descriptor = runCatching { establishTunnel(settings.ipv6) }
+        val descriptor: ParcelFileDescriptor = runCatching { establishTunnel(settings.ipv6) }
             .getOrElse { error ->
                 fail("建立隧道失败：${error.message ?: "系统拒绝"}")
                 return
             }
-        if (descriptor == null) {
-            fail("建立隧道失败，VPN 授权可能已被撤销")
-            return
-        }
-        tunnel = descriptor
+            ?: run {
+                fail("建立隧道失败，VPN 授权可能已被撤销")
+                return
+            }
+
+        // From here the number belongs to the core; see the class comment.
+        val fd = descriptor.detachFd()
 
         val gateway = buildString {
             append(TUN_V4_ADDRESS).append('/').append(TUN_V4_PREFIX)
@@ -96,19 +104,19 @@ class ZephyrVpnService : VpnService() {
             Zephyrcore.start(
                 ZephyrState.store.runtimeDir.absolutePath,
                 configYaml,
-                descriptor.fd,
+                fd,
                 gateway,
                 dnsHijack,
                 protector,
             )
-            null
-        }.getOrElse { it }
+        }.exceptionOrNull()
 
         if (failure != null) {
             fail("内核启动失败：${failure.message ?: failure::class.java.simpleName}")
             return
         }
 
+        coreUp = true
         starting = false
         withContext(Dispatchers.Main) {
             ZephyrState.onCoreStarted()
@@ -154,10 +162,9 @@ class ZephyrVpnService : VpnService() {
 
     private fun shutdown() {
         starting = false
+        coreUp = false
+        // Stops the listeners, which is also what closes the TUN descriptor.
         runCatching { Zephyrcore.stop() }
-        // sing-tun may have taken the descriptor down with it already.
-        runCatching { tunnel?.close() }
-        tunnel = null
         ZephyrState.onCoreStopped()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -170,9 +177,8 @@ class ZephyrVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        coreUp = false
         runCatching { Zephyrcore.stop() }
-        runCatching { tunnel?.close() }
-        tunnel = null
         scope.cancel()
         super.onDestroy()
     }
@@ -204,8 +210,8 @@ class ZephyrVpnService : VpnService() {
             .addAction(0, getString(R.string.notif_stop), stop)
             .setOngoing(true)
             .setShowWhen(false)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()
 
         ServiceCompat.startForeground(

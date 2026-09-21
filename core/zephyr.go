@@ -48,23 +48,33 @@ var (
 // form ("172.19.0.1/30", optionally plus a comma-separated IPv6 prefix) and
 // dnsHijack is the address inside the tunnel that DNS is redirected to.
 //
+// Ownership of tunFd passes to this package the moment Start is called with a
+// positive value, whatever the outcome: on an early failure it is closed here,
+// once the TUN listener has taken it sing-tun closes it on Stop. The Kotlin
+// side must therefore detach the descriptor and never close it itself; two
+// owners closing the same number is how another thread's freshly opened file
+// gets shut underneath it.
+//
 // The REST controller and everything else come from configYAML, so this
 // signature does not grow as the app gains features.
 func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijack string, protector Protector) error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	if tunFd <= 0 {
+		return fmt.Errorf("invalid tun file descriptor %d", tunFd)
+	}
 	if started {
+		closeFd(tunFd)
 		return errors.New("core is already running")
 	}
 	if home == "" {
+		closeFd(tunFd)
 		return errors.New("missing home directory")
 	}
 	if protector == nil {
+		closeFd(tunFd)
 		return errors.New("missing socket protector")
-	}
-	if tunFd <= 0 {
-		return fmt.Errorf("invalid tun file descriptor %d", tunFd)
 	}
 
 	// Must precede config.Parse: geoip/geosite paths resolve through this.
@@ -72,9 +82,11 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 
 	cfg, err := config.Parse([]byte(configYAML))
 	if err != nil {
+		closeFd(tunFd)
 		return fmt.Errorf("parse config: %w", err)
 	}
 	if err := applyTun(cfg, int(tunFd), gateway, dnsHijack); err != nil {
+		closeFd(tunFd)
 		return err
 	}
 
@@ -84,7 +96,10 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 
 	// ReCreateTun reports failure by logging and clearing Enable rather than
 	// returning an error, so a core that never got its TUN would otherwise look
-	// perfectly healthy while carrying no traffic at all.
+	// perfectly healthy while carrying no traffic at all. sing-tun has had the
+	// descriptor since ApplyConfig and closes it during Shutdown; closing it
+	// again here would risk hitting a number the runtime has since reused, so
+	// the rare leak on this path is the safer failure.
 	if !listener.GetTunConf().Enable {
 		executor.Shutdown()
 		dialer.DefaultSocketHook = nil
@@ -95,7 +110,8 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 	return nil
 }
 
-// Stop unwinds the listeners and the fake-ip pool. Safe to call when not running.
+// Stop unwinds the listeners (which closes the TUN descriptor) and the fake-ip
+// pool. Safe to call when not running.
 func Stop() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -113,6 +129,11 @@ func Running() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return started
+}
+
+// closeFd releases a descriptor the TUN listener never got to own.
+func closeFd(fd int32) {
+	_ = syscall.Close(int(fd))
 }
 
 // applyTun overwrites whatever the subscription said about tun. Routing and the

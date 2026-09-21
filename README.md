@@ -18,7 +18,10 @@ The app does three things:
 It has no in-app updater, no analytics, no crash reporting, no cloud service,
 no subscription-conversion service, and no remote scripting. The only request
 it makes to the public internet is the subscription fetch, and that goes to the
-address you entered and nowhere else.
+address you entered and nowhere else. Subscriptions must be `https://`: the
+network security config refuses cleartext to every host except `127.0.0.1`,
+where the core's REST API lives, so no code path can leak a subscription body
+over plain HTTP by accident.
 
 Permissions requested, in full:
 
@@ -42,6 +45,16 @@ app/.../vpn           VpnService: opens the TUN, owns the notification
 app/.../core          config merge, REST client, subscription fetch
 app/.../ui            Compose screens, hand-drawn icons, no icon library
 ```
+
+Screens follow the desktop build's seven sections: overview, proxies,
+profiles, connections, rules, logs, settings. Five are bottom tabs; connections
+and rules open from the overview and settings, as they do on desktop.
+
+The TUN descriptor has exactly one owner. Kotlin detaches it from the
+`ParcelFileDescriptor` and hands the raw number to the core; from that call on
+the core closes it, whether start succeeds or fails early. Nothing on the
+Kotlin side ever closes it, which rules out the double-close that would
+otherwise shut a descriptor another thread had just been handed.
 
 mihomo upstream accepts a file descriptor for its TUN device
 (`listener/config.Tun.FileDescriptor`) and exposes a socket hook

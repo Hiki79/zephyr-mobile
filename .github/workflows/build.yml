@@ -25,8 +25,7 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.27.1"
-          # go.sum does not exist until the first run has produced it.
-          cache: false
+          cache-dependency-path: core/go.sum
 
       # packages:"" matters — the action's default list still names the legacy
       # `tools` package, which no longer exists and fails the whole step.

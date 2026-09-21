@@ -1,26 +1,32 @@
 package dev.zephyr.mobile.ui
 
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -28,8 +34,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,7 +47,7 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun ZCard(
     modifier: Modifier = Modifier,
-    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -58,7 +66,9 @@ fun CardHeader(
     trailing: @Composable (() -> Unit)? = null,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 13.dp, bottom = 11.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 12.dp, top = 13.dp, bottom = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -66,7 +76,7 @@ fun CardHeader(
                 Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Z.ink)
                 if (count != null) {
                     Spacer(Modifier.width(6.dp))
-                    Text(count, fontSize = 14.sp, color = Z.faint)
+                    Text(count, fontSize = 14.sp, color = Z.muted)
                 }
             }
             if (description != null) {
@@ -89,7 +99,7 @@ fun HairLine(color: Color = Z.lineIn) {
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = KickerStyle, color = Z.faint, modifier = modifier)
+    Text(text, style = KickerStyle, color = Z.muted, modifier = modifier)
 }
 
 /** `01 / OVERVIEW` with the short blue rule the desktop build puts before it. */
@@ -143,7 +153,7 @@ fun DelayPill(ms: Int?, modifier: Modifier = Modifier) {
         DelayTone.OK -> Triple(Z.bluePale, Z.blueLine, Color(0xFF2148C9))
         DelayTone.MID -> Triple(Color(0xFFFFEFD6), Color(0xFFF0CD8C), Color(0xFFB5701A))
         DelayTone.BAD -> Triple(Color(0xFFFFE4E4), Color(0xFFF0B4B4), Z.red)
-        DelayTone.NONE -> Triple(Color(0xFFF1F2F5), Z.lineDark, Z.faint)
+        DelayTone.NONE -> Triple(Color(0xFFF1F2F5), Z.lineDark, Z.muted)
     }
     Box(
         modifier = modifier
@@ -165,10 +175,11 @@ fun DelayPill(ms: Int?, modifier: Modifier = Modifier) {
 @Composable
 fun DelayDot(ms: Int?, modifier: Modifier = Modifier) {
     val tone = delayTone(ms)
+    val color = if (tone == DelayTone.NONE) Z.muted else tone.color()
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(7.dp).background(tone.color(), CircleShape))
+        Box(Modifier.size(7.dp).background(color, CircleShape))
         Spacer(Modifier.width(6.dp))
-        Text(delayText(ms), fontSize = 11.5.sp, color = tone.color(), maxLines = 1)
+        Text(delayText(ms), fontSize = 11.5.sp, color = color, maxLines = 1)
     }
 }
 
@@ -191,6 +202,10 @@ fun Tag(text: String, modifier: Modifier = Modifier, tone: Color = Z.muted) {
 
 // ------------------------------------------------------------------ controls
 
+/**
+ * Visually the desktop switch, 40 by 22; the touch target is the platform's
+ * 48 dp minimum, and the semantics say "switch" so TalkBack reads it as one.
+ */
 @Composable
 fun ZSwitch(
     checked: Boolean,
@@ -208,17 +223,27 @@ fun ZSwitch(
     )
     Box(
         modifier = Modifier
-            .size(width = 40.dp, height = 22.dp)
-            .background(track, RoundedCornerShape(11.dp))
-            .border(1.dp, if (checked && enabled) Z.blueDark else Z.lineDark, RoundedCornerShape(11.dp))
-            .clickable(enabled = enabled) { onChange(!checked) },
+            .minimumInteractiveComponentSize()
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange),
+        contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier
-                .offset(x = knob, y = 1.dp)
-                .size(18.dp)
-                .background(Color.White, CircleShape),
-        )
+            modifier = Modifier
+                .size(width = 40.dp, height = 22.dp)
+                .background(track, RoundedCornerShape(11.dp))
+                .border(
+                    1.dp,
+                    if (checked && enabled) Z.blueDark else Z.lineDark,
+                    RoundedCornerShape(11.dp),
+                ),
+        ) {
+            Box(
+                Modifier
+                    .offset(x = knob, y = 1.dp)
+                    .size(18.dp)
+                    .background(Color.White, CircleShape),
+            )
+        }
     }
 }
 
@@ -236,12 +261,13 @@ fun <T> Segmented(
     ) {
         options.forEachIndexed { index, (optionValue, label) ->
             val active = optionValue == value
-            if (index > 0) Box(Modifier.width(1.dp).height(26.dp).background(Z.lineDark))
+            if (index > 0) Box(Modifier.width(1.dp).height(32.dp).background(Z.lineDark))
             Box(
                 modifier = Modifier
                     .background(if (active) Z.bluePale else Color.Transparent)
-                    .clickable { onChange(optionValue) }
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
+                    .selectable(selected = active, role = Role.RadioButton) { onChange(optionValue) }
+                    .defaultMinSize(minHeight = 32.dp)
+                    .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
@@ -256,6 +282,10 @@ fun <T> Segmented(
     }
 }
 
+/**
+ * The desktop button, sized for a thumb: 32 dp tall in its small form and
+ * 40 dp otherwise, where the desktop uses 26 and 30.
+ */
 @Composable
 fun ZButton(
     text: String,
@@ -273,7 +303,7 @@ fun ZButton(
         else -> Z.card
     }
     val content = when {
-        !enabled -> Z.faint
+        !enabled -> Z.muted
         primary -> Color.White
         danger -> Z.red
         else -> Z.ink
@@ -288,8 +318,9 @@ fun ZButton(
         modifier = modifier
             .background(background, RoundedCornerShape(Z.radiusSm))
             .border(1.dp, edge, RoundedCornerShape(Z.radiusSm))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = if (small) 10.dp else 13.dp, vertical = if (small) 5.dp else 7.dp),
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .defaultMinSize(minHeight = if (small) 32.dp else 40.dp)
+            .padding(horizontal = if (small) 11.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
@@ -316,27 +347,36 @@ fun ZTextField(
     leading: ImageVector? = null,
     singleLine: Boolean = true,
     rounded: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val shape = RoundedCornerShape(if (rounded) 999.dp else Z.radiusSm)
     Row(
         modifier = modifier
             .background(Z.card, shape)
             .border(1.dp, Z.lineDark, shape)
-            .padding(horizontal = 11.dp, vertical = 8.dp),
+            .defaultMinSize(minHeight = 40.dp)
+            .padding(horizontal = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leading != null) {
-            Icon(leading, null, tint = Z.faint, modifier = Modifier.size(14.dp))
+            Icon(leading, null, tint = Z.muted, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(8.dp))
         }
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (value.isEmpty()) {
-                Text(placeholder, fontSize = 13.sp, color = Z.faint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    placeholder,
+                    fontSize = 13.sp,
+                    color = Z.faint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = singleLine,
+                keyboardOptions = keyboardOptions,
                 textStyle = TextStyle(fontSize = 13.sp, color = Z.ink),
                 cursorBrush = SolidColor(Z.blue),
                 modifier = Modifier.fillMaxWidth(),
@@ -372,7 +412,7 @@ fun EmptyState(
             fontSize = 13.sp,
             color = Z.muted,
             lineHeight = 19.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            textAlign = TextAlign.Center,
         )
         if (action != null) {
             Spacer(Modifier.height(14.dp))
@@ -388,12 +428,15 @@ fun CardFoot(text: String, trailing: @Composable (() -> Unit)? = null) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text, fontSize = 12.sp, color = Z.muted, modifier = Modifier.weight(1f))
-        trailing?.invoke()
+        Text(text, fontSize = 12.sp, color = Z.muted, modifier = Modifier.weight(1f), lineHeight = 16.sp)
+        if (trailing != null) {
+            Spacer(Modifier.width(10.dp))
+            trailing()
+        }
     }
 }
 
-/** A tappable row used throughout the settings and detail lists. */
+/** A row used throughout the settings and detail lists. */
 @Composable
 fun SettingRow(
     title: String,
@@ -404,8 +447,11 @@ fun SettingRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .then(
+                if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier,
+            )
+            .defaultMinSize(minHeight = 52.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -421,4 +467,3 @@ fun SettingRow(
         }
     }
 }
-

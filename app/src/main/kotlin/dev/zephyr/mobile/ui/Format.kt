@@ -2,7 +2,6 @@ package dev.zephyr.mobile.ui
 
 import androidx.compose.ui.graphics.Color
 import java.util.Locale
-import kotlin.math.abs
 
 private val BYTE_UNITS = arrayOf("B", "KB", "MB", "GB", "TB", "PB")
 
@@ -128,5 +127,3 @@ fun percentOf(used: Long, total: Long): Float =
 
 fun abbreviate(value: String, max: Int): String =
     if (value.length <= max) value else value.take(max - 1) + "…"
-
-internal fun safeLong(value: Long): Long = abs(value)

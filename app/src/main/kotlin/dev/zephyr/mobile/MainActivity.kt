@@ -12,7 +12,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,8 +25,8 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -41,8 +40,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,6 +57,7 @@ import dev.zephyr.mobile.ui.screens.LogsScreen
 import dev.zephyr.mobile.ui.screens.OverviewScreen
 import dev.zephyr.mobile.ui.screens.ProfilesScreen
 import dev.zephyr.mobile.ui.screens.ProxiesScreen
+import dev.zephyr.mobile.ui.screens.RulesScreen
 import dev.zephyr.mobile.ui.screens.SettingsScreen
 import kotlinx.coroutines.delay
 
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** The five bottom tabs. Connections and rules open on top of whichever tab is active. */
 private enum class Tab(val label: String, val icon: ImageVector) {
     OVERVIEW("总览", ZIcon.Activity),
     PROXIES("节点", ZIcon.Globe),
@@ -78,11 +81,13 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     SETTINGS("设置", ZIcon.Sliders),
 }
 
+private enum class Overlay { NONE, CONNECTIONS, RULES }
+
 @Composable
 private fun AppRoot() {
     val context = LocalContext.current
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
-    var showConnections by remember { mutableStateOf(false) }
+    var overlay by remember { mutableStateOf(Overlay.NONE) }
 
     val vpnPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -121,8 +126,8 @@ private fun AppRoot() {
         if (intent != null) vpnPermission.launch(intent) else ZephyrState.start(context)
     }
 
-    BackHandler(enabled = showConnections) { showConnections = false }
-    BackHandler(enabled = !showConnections && tab != Tab.OVERVIEW) { tab = Tab.OVERVIEW }
+    BackHandler(enabled = overlay != Overlay.NONE) { overlay = Overlay.NONE }
+    BackHandler(enabled = overlay == Overlay.NONE && tab != Tab.OVERVIEW) { tab = Tab.OVERVIEW }
 
     Box(Modifier.fillMaxSize().background(Z.paper)) {
         Column(
@@ -132,14 +137,14 @@ private fun AppRoot() {
         ) {
             Spacer(Modifier.height(6.dp))
             Box(Modifier.weight(1f)) {
-                if (showConnections) {
-                    ConnectionsScreen(onBack = { showConnections = false })
-                } else {
-                    when (tab) {
+                when (overlay) {
+                    Overlay.CONNECTIONS -> ConnectionsScreen(onBack = { overlay = Overlay.NONE })
+                    Overlay.RULES -> RulesScreen(onBack = { overlay = Overlay.NONE })
+                    Overlay.NONE -> when (tab) {
                         Tab.OVERVIEW -> OverviewScreen(
                             onNavigateProxies = { tab = Tab.PROXIES },
                             onNavigateProfiles = { tab = Tab.PROFILES },
-                            onNavigateConnections = { showConnections = true },
+                            onNavigateConnections = { overlay = Overlay.CONNECTIONS },
                             onToggleVpn = ::toggleVpn,
                         )
 
@@ -148,7 +153,8 @@ private fun AppRoot() {
                         Tab.LOGS -> LogsScreen()
                         Tab.SETTINGS -> SettingsScreen(
                             onOpenLogs = { tab = Tab.LOGS },
-                            onOpenConnections = { showConnections = true },
+                            onOpenConnections = { overlay = Overlay.CONNECTIONS },
+                            onOpenRules = { overlay = Overlay.RULES },
                         )
                     }
                 }
@@ -157,7 +163,7 @@ private fun AppRoot() {
             BottomNav(
                 current = tab,
                 onSelect = {
-                    showConnections = false
+                    overlay = Overlay.NONE
                     tab = it
                 },
             )
@@ -175,7 +181,7 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(vertical = 7.dp),
+                .padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             Tab.entries.forEach { entry ->
@@ -183,14 +189,14 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { onSelect(entry) }
-                        .padding(vertical = 4.dp),
+                        .selectable(selected = active, role = Role.Tab) { onSelect(entry) }
+                        .padding(vertical = 5.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Box(
                         Modifier
                             .background(
-                                if (active) Z.bluePale else androidx.compose.ui.graphics.Color.Transparent,
+                                if (active) Z.bluePale else Color.Transparent,
                                 RoundedCornerShape(8.dp),
                             )
                             .padding(horizontal = 14.dp, vertical = 3.dp),
@@ -198,7 +204,7 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                         Icon(
                             entry.icon,
                             entry.label,
-                            tint = if (active) Z.blue else Z.faint,
+                            tint = if (active) Z.blue else Z.muted,
                             modifier = Modifier.size(19.dp),
                         )
                     }
@@ -207,7 +213,7 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                         entry.label,
                         fontSize = 10.5.sp,
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (active) Z.blueDark else Z.faint,
+                        color = if (active) Z.blueDark else Z.muted,
                     )
                 }
             }
@@ -222,8 +228,7 @@ private fun ToastHost(modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) {
         ZephyrState.toasts.collect { message ->
-            val id = System.nanoTime()
-            visible.add(id to message)
+            visible.add(System.nanoTime() to message)
             if (visible.size > 3) visible.removeAt(0)
         }
     }
@@ -248,12 +253,7 @@ private fun ToastHost(modifier: Modifier = Modifier) {
                         .padding(horizontal = 13.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        message,
-                        fontSize = 12.5.sp,
-                        color = androidx.compose.ui.graphics.Color.White,
-                        lineHeight = 17.sp,
-                    )
+                    Text(message, fontSize = 12.5.sp, color = Color.White, lineHeight = 17.sp)
                 }
             }
         }

@@ -46,7 +46,7 @@ fun ConnectionsScreen(onBack: () -> Unit) {
     ) {
         item {
             PageHeader(
-                kicker = "05 / CONNECTIONS",
+                kicker = "04 / CONNECTIONS",
                 title = "连接",
                 subtitle = "${list.size} 条活动连接 · 累计下载 ${formatBytes(data.downloadTotal)}",
                 trailing = {
