@@ -5,6 +5,8 @@ local.properties
 *.iml
 .DS_Store
 .kotlin/
+__pycache__/
+*.pyc
 
 # Built by CI with gomobile; never committed.
 app/libs/*.aar
