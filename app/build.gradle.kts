@@ -18,8 +18,8 @@ android {
         applicationId = "dev.zephyr.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
 
         // The Go core is built for arm64 only, which is every phone this decade.
         ndk { abiFilters += "arm64-v8a" }
@@ -43,6 +43,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -91,4 +92,31 @@ dependencies {
     // Merging our runtime keys over the subscription's YAML, same job the desktop
     // build does with serde_yaml.
     implementation("org.yaml:snakeyaml:2.7")
+    testImplementation("junit:junit:4.13.2")
+}
+
+val buildPython = if (System.getProperty("os.name").startsWith("Windows")) "python" else "python3"
+val bundleGeoData by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir)
+    commandLine(buildPython, "scripts/fetch_geodata.py")
+}
+tasks.named("preBuild") { dependsOn(bundleGeoData) }
+
+val testCoreBridge by tasks.registering(Exec::class) {
+    workingDir(rootProject.file("core"))
+    commandLine("go", "test", "-p", "2", "-v", "-tags", "foss,with_gvisor,cmfa", "./...")
+}
+
+val verifyRelease by tasks.registering(Exec::class) {
+    dependsOn("packageRelease")
+    workingDir(rootProject.projectDir)
+    commandLine(buildPython, "scripts/verify_release.py",
+        "app/build/outputs/mapping/release/mapping.txt",
+        "app/build/outputs/apk/release/app-release-unsigned.apk")
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach {
+    dependsOn("testDebugUnitTest", testCoreBridge, verifyRelease)
+}
+tasks.withType<Test>().configureEach {
+    testLogging { events("passed", "failed", "skipped") }
 }

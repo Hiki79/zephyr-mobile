@@ -15,6 +15,7 @@ import kotlinx.serialization.json.Json
 class Store(context: Context) {
 
     private val root: File = context.filesDir
+    private val assets = context.assets
     val profilesDir: File = File(root, "profiles").apply { mkdirs() }
     val runtimeDir: File = File(root, "runtime").apply { mkdirs() }
 
@@ -62,7 +63,32 @@ class Store(context: Context) {
     }
 
     fun writeProfileYaml(uid: String, yaml: String) {
-        profileFile(uid).writeText(yaml)
+        val file = android.util.AtomicFile(profileFile(uid))
+        val output = file.startWrite()
+        try {
+            output.write(yaml.toByteArray(Charsets.UTF_8))
+            file.finishWrite(output)
+        } catch (error: Throwable) {
+            file.failWrite(output)
+            throw error
+        }
+    }
+
+    /** Avoid needing a working proxy to download the rules needed to start that proxy. */
+    fun prepareGeoData() {
+        for (name in listOf("GeoIP.dat", "GeoSite.dat", "geoip.metadb", "ASN.mmdb")) {
+            val target = File(runtimeDir, name)
+            if (target.isFile && target.length() > 0) continue
+            val file = android.util.AtomicFile(target)
+            val output = file.startWrite()
+            try {
+                assets.open("geodata/$name").use { it.copyTo(output) }
+                file.finishWrite(output)
+            } catch (error: Throwable) {
+                file.failWrite(output)
+                throw error
+            }
+        }
     }
 
     fun deleteProfileYaml(uid: String) {

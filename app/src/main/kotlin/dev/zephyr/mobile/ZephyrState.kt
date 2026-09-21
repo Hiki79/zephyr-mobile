@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.VpnService
 import dev.zephyr.mobile.core.ClashApi
 import dev.zephyr.mobile.core.Subscription
+import dev.zephyr.mobile.core.ProfileConfig
 import dev.zephyr.mobile.data.Connection
 import dev.zephyr.mobile.data.ConnectionsResponse
 import dev.zephyr.mobile.data.CoreStage
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -86,15 +88,36 @@ object ZephyrState {
     // Touched from the main thread and from the service's IO coroutine, so
     // every access goes through the lock below.
     private val pollJobs = mutableListOf<Job>()
+    @Volatile private var runtimeSettings: Settings? = null
 
     fun init(context: Context) {
         if (::store.isInitialized) return
         store = Store(context.applicationContext)
         _settings.value = store.loadSettings()
         _profiles.value = store.loadProfiles()
+        refreshLocalProxies()
     }
 
-    fun api(): ClashApi = _settings.value.let { ClashApi(it.ctrlPort, it.secret) }
+    fun api(): ClashApi = (runtimeSettings ?: _settings.value).let { ClashApi(it.ctrlPort, it.secret) }
+
+    private fun refreshLocalProxies() {
+        if (_status.value.running || _status.value.stage == CoreStage.STARTING) return
+        val uid = _settings.value.currentProfile
+        scope.launch(Dispatchers.IO) {
+            val preview = store.readProfileYaml(uid)?.let { yaml ->
+                runCatching { ProfileConfig.parse(yaml) }.getOrElse {
+                    pushLog("订阅预览失败：${it.message ?: it.javaClass.simpleName}", LogLevel.ERROR)
+                    null
+                }
+            }
+            if (_settings.value.currentProfile == uid && !_status.value.running && _status.value.stage != CoreStage.STARTING) {
+                _proxies.value = preview?.proxies.orEmpty()
+                if (preview != null) {
+                    _profiles.update { items -> items.map { if (it.uid == uid) it.copy(nodeCount = preview.nodeCount) else it } }
+                }
+            }
+        }
+    }
 
     fun toast(message: String) {
         _toasts.tryEmit(message)
@@ -113,9 +136,15 @@ object ZephyrState {
      * pushed over the API instead of forcing a reconnect.
      */
     fun setMode(mode: String) {
+        val previous = _settings.value.mode
         updateSettings { it.copy(mode = mode) }
         if (_status.value.running) {
-            scope.launch { api().patchMode(mode) }
+            scope.launch {
+                if (!api().patchMode(mode)) {
+                    if (_settings.value.mode == mode) updateSettings { it.copy(mode = previous) }
+                    toast("模式切换失败，请重试")
+                }
+            }
         }
     }
 
@@ -128,10 +157,16 @@ object ZephyrState {
     fun vpnPermissionIntent(context: Context): Intent? = VpnService.prepare(context)
 
     fun start(context: Context) {
+        if (_status.value.running || _status.value.stage == CoreStage.STARTING) return
+        if (_profiles.value.none { it.uid == _settings.value.currentProfile }) {
+            toast("请先选择一个订阅")
+            return
+        }
         _status.value = CoreStatus(stage = CoreStage.STARTING)
         val intent = Intent(context, ZephyrVpnService::class.java)
             .setAction(ZephyrVpnService.ACTION_START)
-        context.startForegroundService(intent)
+        runCatching { context.startForegroundService(intent) }
+            .onFailure { onCoreFailed("无法启动 VPN 服务：${it.message ?: it.javaClass.simpleName}") }
     }
 
     fun stop(context: Context) {
@@ -141,7 +176,8 @@ object ZephyrState {
     }
 
     /** Called by the service once the core reports itself healthy. */
-    fun onCoreStarted() {
+    fun onCoreStarted(settings: Settings) {
+        runtimeSettings = settings
         _status.value = CoreStatus(
             stage = CoreStage.RUNNING,
             startedAt = System.currentTimeMillis() / 1000,
@@ -153,15 +189,20 @@ object ZephyrState {
         stopPolling()
         _status.value = CoreStatus(stage = CoreStage.FAILED, lastError = message)
         pushLog(message, LogLevel.ERROR)
+        toast(message)
     }
 
     fun onCoreStopped() {
         stopPolling()
-        _status.value = CoreStatus(stage = CoreStage.STOPPED)
-        _proxies.value = emptyMap()
+        runtimeSettings = null
+        if (_status.value.stage != CoreStage.FAILED) {
+            _status.value = CoreStatus(stage = CoreStage.STOPPED)
+        }
         _connections.value = ConnectionsResponse()
+        _rules.value = emptyList()
         _memory.value = 0
         _traffic.value = List(TRAFFIC_HISTORY) { TrafficSample() }
+        refreshLocalProxies()
     }
 
     // ------------------------------------------------------------ polling
@@ -239,6 +280,10 @@ object ZephyrState {
     }
 
     fun refreshProxies() {
+        if (!_status.value.running) {
+            refreshLocalProxies()
+            return
+        }
         scope.launch { _proxies.value = api().proxies() }
     }
 
@@ -250,11 +295,11 @@ object ZephyrState {
         if (text.isBlank()) return
         val line = LogLine(
             id = logSeq.incrementAndGet(),
-            time = timeFormat.format(Date()),
+            time = synchronized(timeFormat) { timeFormat.format(Date()) },
             text = text,
             level = level,
         )
-        _logs.value = (_logs.value + line).takeLast(MAX_LOGS)
+        _logs.update { (it + line).takeLast(MAX_LOGS) }
     }
 
     fun clearLogs() {
@@ -264,6 +309,10 @@ object ZephyrState {
     // ------------------------------------------------------------ proxies
 
     fun selectNode(group: String, node: String) {
+        if (!_status.value.running) {
+            toast("连接后可切换节点")
+            return
+        }
         // Show the change at once, then let the next refresh confirm it.
         _proxies.value = _proxies.value.toMutableMap().apply {
             this[group]?.let { this[group] = it.copy(now = node) }
@@ -296,6 +345,7 @@ object ZephyrState {
                     if (_settings.value.currentProfile == null) {
                         updateSettings { it.copy(currentProfile = uid) }
                     }
+                    refreshLocalProxies()
                     onResult(null)
                     toast("${profile.name} 已添加")
                 }
@@ -314,6 +364,7 @@ object ZephyrState {
                     _profiles.value = _profiles.value.map { if (it.uid == uid) fresh else it }
                     store.saveProfiles(_profiles.value)
                     toast("${fresh.name} 已更新")
+                    refreshLocalProxies()
                     if (_settings.value.currentProfile == uid && _status.value.running) {
                         toast("重新连接后生效")
                     }
@@ -325,6 +376,7 @@ object ZephyrState {
 
     fun selectProfile(uid: String) {
         updateSettings { it.copy(currentProfile = uid) }
+        refreshLocalProxies()
         if (_status.value.running) toast("重新连接后生效")
     }
 
@@ -335,6 +387,7 @@ object ZephyrState {
         if (_settings.value.currentProfile == uid) {
             updateSettings { it.copy(currentProfile = _profiles.value.firstOrNull()?.uid) }
         }
+        refreshLocalProxies()
     }
 
     // ------------------------------------------------------------ connections
@@ -357,13 +410,16 @@ object ZephyrState {
 }
 
 /** Groups in config order, with the plain nodes filtered out. */
-fun selectGroups(proxies: Map<String, ProxyItem>): List<ProxyItem> {
+fun selectGroups(proxies: Map<String, ProxyItem>, mode: String = "rule"): List<ProxyItem> {
+    val global = proxies["GLOBAL"]?.takeIf { it.isGroup }
+    if (mode == "global" && global != null) return listOf(global)
     val ordered = proxies["GLOBAL"]?.all
         ?.mapNotNull { proxies[it] }
         ?.filter { it.isGroup }
         .orEmpty()
     if (ordered.isNotEmpty()) return ordered
     return proxies.values.filter { it.isGroup && it.name != "GLOBAL" }
+        .ifEmpty { listOfNotNull(global) }
 }
 
 /** A group shows the latency of whichever node it currently points at. */

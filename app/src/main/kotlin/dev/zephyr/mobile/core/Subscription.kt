@@ -76,8 +76,8 @@ object Subscription {
             }
 
             if (body.isBlank()) throw FetchError("订阅内容为空")
-            if (!looksLikeClashConfig(body)) {
-                throw FetchError("这个地址返回的不是 Clash/mihomo 配置，可能是 v2ray 或 base64 订阅")
+            val preview = runCatching { ProfileConfig.parse(body) }.getOrElse {
+                throw FetchError("订阅配置无效：${it.message}")
             }
 
             store.writeProfileYaml(uid, body)
@@ -95,18 +95,9 @@ object Subscription {
                 total = info["total"] ?: 0,
                 expire = info["expire"] ?: 0,
                 home = headers["profile-web"]?.takeIf { it.isNotBlank() },
-                nodeCount = countNodes(body),
+                nodeCount = preview.nodeCount,
             )
         }
-
-    /**
-     * A base64 or v2ray subscription parses as YAML without error but produces
-     * a config with nothing in it, so the shape is checked before it is stored.
-     */
-    private fun looksLikeClashConfig(body: String): Boolean {
-        val head = body.take(200_000)
-        return head.contains("proxies:") || head.contains("proxy-providers:")
-    }
 
     /** `upload=1; download=2; total=3; expire=4` on the subscription-userinfo header. */
     private fun parseUserInfo(header: String): Map<String, Long> =
@@ -134,13 +125,6 @@ object Subscription {
 
     private fun defaultName(url: String): String =
         runCatching { java.net.URI(url).host ?: "订阅" }.getOrElse { "订阅" }
-
-    /** A count good enough for the card; the core's own list is authoritative. */
-    private fun countNodes(body: String): Int =
-        body.lineSequence().count { line ->
-            val trimmed = line.trimStart()
-            trimmed.startsWith("- {") || trimmed.startsWith("- name:")
-        }
 
     /**
      * System DNS first; when it comes back empty — the usual symptom of a

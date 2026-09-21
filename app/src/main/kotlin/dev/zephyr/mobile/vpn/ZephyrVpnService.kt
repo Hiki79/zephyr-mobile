@@ -15,6 +15,7 @@ import dev.zephyr.mobile.MainActivity
 import dev.zephyr.mobile.R
 import dev.zephyr.mobile.ZephyrState
 import dev.zephyr.mobile.core.ConfigBuilder
+import dev.zephyr.mobile.core.ClashApi
 import dev.zephyr.mobile.data.LogLevel
 import dev.zephyr.zephyrcore.Protector
 import dev.zephyr.zephyrcore.Zephyrcore
@@ -23,7 +24,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Owns the tunnel. Android hands a file descriptor to whoever calls establish();
@@ -37,6 +42,9 @@ import kotlinx.coroutines.withContext
 class ZephyrVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lifecycle = Mutex()
+    private val generation = AtomicLong()
+    private var latestStartId = 0
 
     @Volatile private var coreUp = false
 
@@ -52,6 +60,7 @@ class ZephyrVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
         if (intent?.action == ACTION_STOP) {
             shutdown()
             return START_NOT_STICKY
@@ -63,20 +72,30 @@ class ZephyrVpnService : VpnService() {
 
         if (!coreUp && !starting) {
             starting = true
-            scope.launch { bringUp() }
+            val attempt = generation.incrementAndGet()
+            scope.launch { lifecycle.withLock { if (generation.get() == attempt) bringUp(attempt) } }
         }
         return START_STICKY
     }
 
-    private suspend fun bringUp() {
+    private suspend fun bringUp(attempt: Long) {
         val settings = ZephyrState.settings.value
         val profileYaml = ZephyrState.store.readProfileYaml(settings.currentProfile)
 
         val configYaml = runCatching { ConfigBuilder.build(profileYaml, settings) }
             .getOrElse { error ->
-                fail("配置无法解析：${error.message ?: "格式错误"}")
+                fail("配置无法解析：${describe(error)}")
                 return
             }
+
+        runCatching {
+            Zephyrcore.running() // Load JNI before transferring any file descriptor.
+            ZephyrState.store.prepareGeoData()
+        }.onFailure {
+            fail("内核准备失败：${describe(it)}")
+            return
+        }
+        if (generation.get() != attempt) return
 
         val descriptor: ParcelFileDescriptor = runCatching { establishTunnel(settings.ipv6) }
             .getOrElse { error ->
@@ -112,14 +131,29 @@ class ZephyrVpnService : VpnService() {
         }.exceptionOrNull()
 
         if (failure != null) {
-            fail("内核启动失败：${failure.message ?: failure::class.java.simpleName}")
+            fail("内核启动失败：${describe(failure)}")
+            return
+        }
+
+        if (generation.get() != attempt) return
+        // ApplyConfig starts the controller asynchronously; wait before opening streams.
+        val api = ClashApi(settings.ctrlPort, settings.secret)
+        var ready = false
+        for (retry in 0 until 10) {
+            if (generation.get() != attempt) return
+            if (api.version() != null) { ready = true; break }
+            delay(200)
+        }
+        if (!ready) {
+            fail("内核控制接口未就绪，请检查控制端口是否被占用")
             return
         }
 
         coreUp = true
         starting = false
         withContext(Dispatchers.Main) {
-            ZephyrState.onCoreStarted()
+            if (generation.get() != attempt) return@withContext
+            ZephyrState.onCoreStarted(settings)
             ZephyrState.pushLog("内核已启动", LogLevel.INFO)
             goForeground(
                 getString(R.string.notif_connected),
@@ -165,14 +199,26 @@ class ZephyrVpnService : VpnService() {
         shutdown()
     }
 
-    private fun shutdown() {
+    private fun shutdown(destroyed: Boolean = false) {
+        val stoppedGeneration = generation.incrementAndGet()
+        val stoppedStartId = latestStartId
         starting = false
         coreUp = false
-        // Stops the listeners, which is also what closes the TUN descriptor.
-        runCatching { Zephyrcore.stop() }
-        ZephyrState.onCoreStopped()
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        scope.launch {
+            // A native Start cannot be cancelled midway. Serialize teardown after it,
+            // without blocking Android's main thread while Go finishes parsing.
+            lifecycle.withLock {
+                runCatching { Zephyrcore.stop() }
+                withContext(Dispatchers.Main) {
+                    if (generation.get() == stoppedGeneration) {
+                        ZephyrState.onCoreStopped()
+                        ServiceCompat.stopForeground(this@ZephyrVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                        if (!destroyed) stopSelfResult(stoppedStartId)
+                    }
+                }
+            }
+            if (destroyed) scope.cancel()
+        }
     }
 
     /** The user revoked the VPN, or another app took it over. */
@@ -182,11 +228,14 @@ class ZephyrVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        coreUp = false
-        runCatching { Zephyrcore.stop() }
-        scope.cancel()
+        shutdown(destroyed = true)
         super.onDestroy()
     }
+
+    private fun describe(error: Throwable): String =
+        generateSequence(error) { it.cause }.take(8).joinToString(" → ") {
+            "${it.javaClass.simpleName}: ${it.message ?: "初始化失败"}"
+        }
 
     // ------------------------------------------------------------ notification
 

@@ -7,6 +7,11 @@
 # generated proxy, so the implementation must keep its method signature.
 -keep class dev.zephyr.mobile.core.** { *; }
 
+# TypeDescription and PropertySubstitute initialize their logger with
+# Class.getPackage().getName(). Repackaging them into the default package
+# makes getPackage() return null on Android (the released ct1 failure).
+-keeppackagenames org.yaml.snakeyaml.**
+
 -dontwarn org.slf4j.**
 -dontwarn java.beans.**
 -dontwarn javax.xml.**

@@ -86,7 +86,7 @@ fun OverviewScreen(
 
     var picking by remember { mutableStateOf(false) }
 
-    val groups = remember(proxies) { selectGroups(proxies) }
+    val groups = remember(proxies, settings.mode) { selectGroups(proxies, settings.mode) }
     val pinned = settings.pinnedGroups
     val summary = remember(groups, pinned) {
         if (pinned.isEmpty()) groups.take(DEFAULT_SUMMARY) else groups.filter { it.name in pinned }

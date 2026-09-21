@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.zephyr.mobile.ZephyrState
+import dev.zephyr.mobile.BuildConfig
 import dev.zephyr.mobile.ui.CardFoot
 import dev.zephyr.mobile.ui.CardHeader
 import dev.zephyr.mobile.ui.HairLine
@@ -241,7 +242,7 @@ fun SettingsScreen(
         item {
             ZCard {
                 CardHeader("关于", description = "这个应用做了什么，没做什么")
-                InfoRow("界面版本", "0.1.0")
+                InfoRow("界面版本", BuildConfig.VERSION_NAME)
                 HairLine()
                 InfoRow("内核", status.coreVersion ?: "未运行")
                 HairLine()

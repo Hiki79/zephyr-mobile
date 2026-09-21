@@ -8,6 +8,7 @@ local.properties
 
 # Built by CI with gomobile; never committed.
 app/libs/*.aar
+app/src/main/assets/geodata/
 
 # Signing material must never enter the repository.
 *.jks

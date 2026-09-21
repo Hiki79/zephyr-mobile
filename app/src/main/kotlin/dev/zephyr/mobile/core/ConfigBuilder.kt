@@ -13,17 +13,6 @@ import org.yaml.snakeyaml.constructor.SafeConstructor
  */
 object ConfigBuilder {
 
-    /** Used until the user adds a subscription, so the UI always has a core to talk to. */
-    private const val BLANK_PROFILE = """
-proxies: []
-proxy-groups:
-  - name: 节点选择
-    type: select
-    proxies: [DIRECT]
-rules:
-  - MATCH,DIRECT
-"""
-
     /**
      * Listener keys we always own. A subscription that sets its own `port` or
      * `mixed-port` would otherwise collide with ours and the core would fail to
@@ -36,11 +25,15 @@ rules:
         "external-controller-unix", "external-controller-pipe", "external-ui",
         "secret", "allow-lan", "bind-address", "log-level", "mode", "ipv6",
         "unified-delay", "tcp-concurrent", "find-process-mode",
-        "global-client-fingerprint", "profile",
+        "global-client-fingerprint", "profile", "listeners", "tunnels",
+        "interface-name", "routing-mark", "iptables", "external-doh-server",
+        "external-ui-url", "external-ui-name",
     )
 
     fun build(profileYaml: String?, settings: Settings): String {
-        val source = profileYaml?.takeIf { it.isNotBlank() } ?: BLANK_PROFILE
+        val source = requireNotNull(profileYaml?.takeIf { it.isNotBlank() }) {
+            "当前订阅文件不存在或为空，请更新订阅后重试"
+        }
         val root = parseToMap(source)
 
         // A method reference would not type-check here: remove returns the old
@@ -79,7 +72,7 @@ rules:
         return dump(root)
     }
 
-    private fun parseToMap(text: String): LinkedHashMap<String, Any?> {
+    internal fun parseToMap(text: String): LinkedHashMap<String, Any?> {
         // A subscription is remote input from the provider. SafeConstructor
         // keeps YAML tags from instantiating arbitrary classes; the raised code
         // point limit is only there because real configs run past the default.
@@ -89,6 +82,7 @@ rules:
             maxAliasesForCollections = 256
         }
         val parsed = Yaml(SafeConstructor(loaderOptions)).load<Any?>(text)
+        require(parsed is Map<*, *>) { "订阅必须是 Clash/mihomo YAML 配置" }
         val result = LinkedHashMap<String, Any?>()
         if (parsed is Map<*, *>) {
             parsed.forEach { (key, value) -> if (key is String) result[key] = value }

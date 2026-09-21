@@ -25,9 +25,11 @@ import (
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
+	"github.com/metacubex/mihomo/hub/route"
 	"github.com/metacubex/mihomo/listener"
 	lc "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/sing_tun"
+	"github.com/metacubex/mihomo/tunnel"
 )
 
 // Protector is implemented in Kotlin by the VpnService. Every socket the core
@@ -79,18 +81,20 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 
 	// Must precede config.Parse: geoip/geosite paths resolve through this.
 	constant.SetHomeDir(home)
+	route.SetEmbedMode(true)
+	installSocketHook(protector)
 
 	cfg, err := config.Parse([]byte(configYAML))
 	if err != nil {
 		closeFd(tunFd)
+		dialer.DefaultSocketHook = nil
 		return fmt.Errorf("parse config: %w", err)
 	}
 	if err := applyTun(cfg, int(tunFd), gateway, dnsHijack); err != nil {
 		closeFd(tunFd)
+		dialer.DefaultSocketHook = nil
 		return err
 	}
-
-	installSocketHook(protector)
 
 	hub.ApplyConfig(cfg)
 
@@ -101,7 +105,7 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 	// again here would risk hitting a number the runtime has since reused, so
 	// the rare leak on this path is the safer failure.
 	if !listener.GetTunConf().Enable {
-		executor.Shutdown()
+		shutdownCore()
 		dialer.DefaultSocketHook = nil
 		return errors.New("tun listener failed to start; check the core log")
 	}
@@ -119,9 +123,17 @@ func Stop() {
 	if !started {
 		return
 	}
-	executor.Shutdown()
+	shutdownCore()
 	dialer.DefaultSocketHook = nil
 	started = false
+}
+
+func shutdownCore() {
+	// Cleanup alone leaves LastTunConf enabled. Android can reuse the same fd,
+	// in which case the next ReCreateTun would skip creating a listener entirely.
+	listener.ReCreateTun(lc.Tun{}, tunnel.Tunnel)
+	listener.ReCreateMixed(0, tunnel.Tunnel)
+	executor.Shutdown()
 }
 
 // Running reports whether Start has succeeded and Stop has not yet run.

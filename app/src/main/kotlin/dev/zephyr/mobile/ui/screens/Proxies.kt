@@ -55,11 +55,14 @@ import dev.zephyr.mobile.ui.nodeMeta
 import dev.zephyr.mobile.ui.regionOf
 
 @Composable
-fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
+fun ProxiesScreen(onNavigateProfiles: () -> Unit, onConnect: () -> Unit) {
     val proxies by ZephyrState.proxies.collectAsState()
     val status by ZephyrState.status.collectAsState()
+    val settings by ZephyrState.settings.collectAsState()
+    val profiles by ZephyrState.profiles.collectAsState()
+    val currentProfile = profiles.find { it.uid == settings.currentProfile }
 
-    val groups = remember(proxies) { selectGroups(proxies) }
+    val groups = remember(proxies, settings.mode) { selectGroups(proxies, settings.mode) }
     var activeName by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var hideDead by remember { mutableStateOf(false) }
@@ -100,14 +103,21 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
             ZCard {
                 EmptyState(
                     icon = ZIcon.Globe,
-                    title = if (status.running) "内核还没有返回节点" else "还没有可用的节点",
+                    title = if (status.running) "内核还没有返回节点" else if (currentProfile != null) "订阅已导入" else "还没有订阅",
                     description = if (status.running) {
-                        "稍等片刻，或下拉刷新。"
+                        "稍等片刻，或点刷新重试。"
+                    } else if (currentProfile != null) {
+                        status.lastError ?: "${currentProfile.name} 已保存，连接后加载节点提供器。"
                     } else {
                         "添加一个订阅并连接之后，它的策略组和节点会出现在这里。"
                     },
                     action = {
-                        ZButton("去添加订阅", onClick = onNavigateProfiles, primary = true, icon = ZIcon.Plus)
+                        when {
+                            status.running -> ZButton("刷新", onClick = ZephyrState::refreshProxies, primary = true)
+                            currentProfile != null -> ZButton("连接代理", onClick = onConnect, primary = true,
+                                enabled = status.stage != dev.zephyr.mobile.data.CoreStage.STARTING)
+                            else -> ZButton("去添加订阅", onClick = onNavigateProfiles, primary = true, icon = ZIcon.Plus)
+                        }
                     },
                 )
             }
@@ -125,6 +135,19 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
                 title = "节点",
                 subtitle = "${groups.size} 个策略组 · 当前 ${active?.name ?: "--"} 指向 ${resolveChain(proxies, active?.now)}",
             )
+        }
+
+        if (!status.running) {
+            item {
+                ZCard {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(status.lastError ?: "已从订阅读取节点，连接后可切换和测速。", color = Z.muted, fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
+                        ZButton("连接代理", onClick = onConnect, primary = true,
+                            enabled = status.stage != dev.zephyr.mobile.data.CoreStage.STARTING)
+                    }
+                }
+            }
         }
 
         // The desktop puts the group list in a left rail; a phone gets a
@@ -169,7 +192,8 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
                             Text("(${active?.all?.size ?: 0})", fontSize = 14.sp, color = Z.faint)
                         }
                         Text(
-                            if (switchable) "当前 ${active?.now ?: "--"}"
+                            if (!status.running) "订阅预览 · 连接后加载实际选择"
+                            else if (switchable) "当前 ${active?.now ?: "--"}"
                             else "${active?.type} 组由内核自动选择，不能手动切换",
                             fontSize = 12.sp,
                             color = Z.muted,
@@ -215,7 +239,8 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
             item {
                 ZCard {
                     Text(
-                        "没有匹配的节点，换个关键词试试。",
+                        if (!status.running && active?.all.isNullOrEmpty()) "此组的节点提供器会在连接后加载。"
+                        else "没有匹配的节点，换个关键词试试。",
                         fontSize = 12.5.sp,
                         color = Z.muted,
                         modifier = Modifier.padding(16.dp),
@@ -262,7 +287,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit) {
                     type = proxies[node]?.type ?: "--",
                     latency = proxies[node]?.latency,
                     selected = active?.now == node,
-                    enabled = switchable,
+                    enabled = switchable && status.running,
                     onClick = { activeName?.let { ZephyrState.selectNode(it, node) } },
                 )
             }

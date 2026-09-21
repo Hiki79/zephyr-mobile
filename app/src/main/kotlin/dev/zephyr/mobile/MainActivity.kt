@@ -148,7 +148,7 @@ private fun AppRoot() {
                             onToggleVpn = ::toggleVpn,
                         )
 
-                        Tab.PROXIES -> ProxiesScreen(onNavigateProfiles = { tab = Tab.PROFILES })
+                        Tab.PROXIES -> ProxiesScreen(onNavigateProfiles = { tab = Tab.PROFILES }, onConnect = { toggleVpn(true) })
                         Tab.PROFILES -> ProfilesScreen()
                         Tab.LOGS -> LogsScreen()
                         Tab.SETTINGS -> SettingsScreen(

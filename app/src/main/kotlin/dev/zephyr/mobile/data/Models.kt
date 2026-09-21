@@ -59,7 +59,7 @@ data class ProxyItem(
     val udp: Boolean = false,
     val history: List<DelayHistory> = emptyList(),
 ) {
-    val isGroup: Boolean get() = !all.isNullOrEmpty()
+    val isGroup: Boolean get() = all != null
 
     /** Last measured latency; 0 means it timed out, null means never tested. */
     val latency: Int? get() = history.lastOrNull()?.delay
