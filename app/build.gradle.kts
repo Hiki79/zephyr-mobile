@@ -6,16 +6,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-// The release signing material is supplied by the build environment, never by a
-// file in the repository. Without it the build still succeeds and produces an
-// APK signed with the local debug key, which is fine for a scratch build but
-// cannot be installed over a release one.
-val keystorePath: String? = System.getenv("ZEPHYR_KEYSTORE")
-val keystorePassword: String? = System.getenv("ZEPHYR_KEYSTORE_PASSWORD")
-val keyAlias: String? = System.getenv("ZEPHYR_KEY_ALIAS")
-val keyPassword: String? = System.getenv("ZEPHYR_KEY_PASSWORD")
-val hasReleaseSigning = !keystorePath.isNullOrBlank() && file(keystorePath).isFile
-
+// Release builds come out of Gradle unsigned on purpose. Signing happens as a
+// visible step in the CI workflow with apksigner, so the key never has to be
+// threaded through the build script and an auditor can see exactly what signs
+// the APK and with which flags.
 android {
     namespace = "dev.zephyr.mobile"
     compileSdk = 37
@@ -31,29 +25,11 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
-    signingConfigs {
-        if (hasReleaseSigning) {
-            create("release") {
-                storeFile = file(keystorePath!!)
-                storePassword = keystorePassword
-                this.keyAlias = keyAlias
-                this.keyPassword = keyPassword
-                storeType = "PKCS12"
-                enableV1Signing = false
-                enableV2Signing = true
-                enableV3Signing = true
-            }
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (hasReleaseSigning) {
-                signingConfig = signingConfigs.getByName("release")
-            }
         }
         debug {
             applicationIdSuffix = ".debug"

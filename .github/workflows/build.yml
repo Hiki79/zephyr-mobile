@@ -127,34 +127,57 @@ jobs:
           name: zephyrcore-aar
           path: app/libs
 
-      - name: Restore signing key
+      - name: Build (unsigned)
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      # Signing is done here, in the open, rather than inside Gradle. With the
+      # repository secrets set the release key is used; without them a key is
+      # generated on the spot so the APK still installs, but such a build
+      # cannot be upgraded in place by a later signed one.
+      - name: Sign
+        id: sign
         env:
           KEYSTORE_BASE64: ${{ secrets.ZEPHYR_KEYSTORE_BASE64 }}
-        run: |
-          set -eu
-          if [ -n "${KEYSTORE_BASE64:-}" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
-            echo "ZEPHYR_KEYSTORE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
-          else
-            echo "::warning::No signing secret configured; the APK gets a debug signature."
-          fi
-
-      - name: Build
-        env:
           ZEPHYR_KEYSTORE_PASSWORD: ${{ secrets.ZEPHYR_KEYSTORE_PASSWORD }}
           ZEPHYR_KEY_ALIAS: ${{ secrets.ZEPHYR_KEY_ALIAS }}
           ZEPHYR_KEY_PASSWORD: ${{ secrets.ZEPHYR_KEY_PASSWORD }}
-        run: gradle --no-daemon --stacktrace assembleRelease
-
-      - name: Name the APK
-        id: name
         run: |
           set -eu
+          tools="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1)"
           src=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
           test -n "$src"
+
+          ks="$RUNNER_TEMP/release.p12"
+          if [ -n "${KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+            alias="$ZEPHYR_KEY_ALIAS"
+            flavour="release"
+          else
+            echo "::warning::No signing secret configured; signing with a throwaway key."
+            export ZEPHYR_KEYSTORE_PASSWORD=throwaway ZEPHYR_KEY_PASSWORD=throwaway
+            keytool -genkeypair -storetype PKCS12 -keystore "$ks" -alias throwaway \
+              -storepass throwaway -keypass throwaway -keyalg RSA -keysize 2048 \
+              -validity 30 -dname "CN=Zephyr throwaway" >/dev/null
+            alias=throwaway
+            flavour="unsigned-key"
+          fi
+
           out="Zephyr-$(date -u +%y.%m.%d)-arm64.apk"
-          cp "$src" "$out"
+          "$tools/zipalign" -p -f 4 "$src" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign \
+            --ks "$ks" --ks-type PKCS12 \
+            --ks-pass env:ZEPHYR_KEYSTORE_PASSWORD \
+            --ks-key-alias "$alias" \
+            --key-pass env:ZEPHYR_KEY_PASSWORD \
+            --v1-signing-enabled false \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "$out" "$RUNNER_TEMP/aligned.apk"
+          rm -f "$ks" "$RUNNER_TEMP/aligned.apk"
+
+          "$tools/apksigner" verify --print-certs "$out"
           echo "apk=$out" >> "$GITHUB_OUTPUT"
+          echo "signed with the $flavour key"
           ls -la "$out"
 
       # archive:false stores the file as-is, so it downloads as an installer
@@ -162,8 +185,8 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ steps.name.outputs.apk }}
-          path: ${{ steps.name.outputs.apk }}
+          name: ${{ steps.sign.outputs.apk }}
+          path: ${{ steps.sign.outputs.apk }}
           if-no-files-found: error
           archive: false
           retention-days: 30

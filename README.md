@@ -77,10 +77,13 @@ There is no local toolchain requirement: GitHub Actions builds both halves.
 Dependencies come from Google's Maven and Maven Central only. Third-party
 GitHub Actions are pinned by commit hash.
 
-To sign releases, set four repository secrets: `ZEPHYR_KEYSTORE_BASE64`
-(a base64 PKCS#12 keystore), `ZEPHYR_KEYSTORE_PASSWORD`, `ZEPHYR_KEY_ALIAS`,
-`ZEPHYR_KEY_PASSWORD`. Without them the build still succeeds and produces a
-debug-signed APK.
+Gradle produces an unsigned release APK; the workflow then signs it with
+`apksigner` in a step you can read. Set four repository secrets for the
+release key: `ZEPHYR_KEYSTORE_BASE64` (a base64 PKCS#12 keystore),
+`ZEPHYR_KEYSTORE_PASSWORD`, `ZEPHYR_KEY_ALIAS`, `ZEPHYR_KEY_PASSWORD`. Without
+them the workflow signs with a throwaway key generated on the runner, so the
+APK still installs but cannot later be upgraded in place by a release-signed
+one.
 
 After the first successful `core` job, download the `go-pins` artifact and
 commit `core/go.mod` and `core/go.sum`. That pins every transitive Go
