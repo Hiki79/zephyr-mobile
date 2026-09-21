@@ -42,9 +42,10 @@ import java.util.concurrent.atomic.AtomicLong
 class ZephyrVpnService : VpnService() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val lifecycle = Mutex()
+    private val lifecycle = CORE_LIFECYCLE
     private val generation = AtomicLong()
     private var latestStartId = 0
+    private var cleanupCompleted = false
 
     @Volatile private var coreUp = false
 
@@ -71,6 +72,7 @@ class ZephyrVpnService : VpnService() {
         goForeground(getString(R.string.notif_connecting), null)
 
         if (!coreUp && !starting) {
+            cleanupCompleted = false
             starting = true
             val attempt = generation.incrementAndGet()
             scope.launch { lifecycle.withLock { if (generation.get() == attempt) bringUp(attempt) } }
@@ -211,6 +213,9 @@ class ZephyrVpnService : VpnService() {
                 runCatching { Zephyrcore.stop() }
                 withContext(Dispatchers.Main) {
                     if (generation.get() == stoppedGeneration) {
+                        coreUp = false
+                        starting = false
+                        cleanupCompleted = true
                         ZephyrState.onCoreStopped()
                         ServiceCompat.stopForeground(this@ZephyrVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                         if (!destroyed) stopSelfResult(stoppedStartId)
@@ -228,7 +233,9 @@ class ZephyrVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        shutdown(destroyed = true)
+        // stopSelf triggers onDestroy after the first cleanup. Do not enqueue
+        // a second native Stop that could race a newly created service.
+        if (cleanupCompleted) scope.cancel() else shutdown(destroyed = true)
         super.onDestroy()
     }
 
@@ -297,6 +304,7 @@ class ZephyrVpnService : VpnService() {
     }
 
     companion object {
+        private val CORE_LIFECYCLE = Mutex()
         const val ACTION_START = "dev.zephyr.mobile.action.START"
         const val ACTION_STOP = "dev.zephyr.mobile.action.STOP"
 

@@ -25,7 +25,6 @@ import (
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
-	"github.com/metacubex/mihomo/hub/route"
 	"github.com/metacubex/mihomo/listener"
 	lc "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/sing_tun"
@@ -81,7 +80,6 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 
 	// Must precede config.Parse: geoip/geosite paths resolve through this.
 	constant.SetHomeDir(home)
-	route.SetEmbedMode(true)
 	installSocketHook(protector)
 
 	cfg, err := config.Parse([]byte(configYAML))
