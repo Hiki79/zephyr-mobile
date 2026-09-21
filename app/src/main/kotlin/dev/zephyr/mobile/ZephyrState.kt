@@ -90,12 +90,17 @@ object ZephyrState {
     private val pollJobs = mutableListOf<Job>()
     @Volatile private var runtimeSettings: Settings? = null
 
+    lateinit var appContext: Context
+        private set
+
     fun init(context: Context) {
         if (::store.isInitialized) return
-        store = Store(context.applicationContext)
+        appContext = context.applicationContext
+        store = Store(appContext)
         _settings.value = store.loadSettings()
         _profiles.value = store.loadProfiles()
         refreshLocalProxies()
+        notifyTile()
     }
 
     fun api(): ClashApi = (runtimeSettings ?: _settings.value).let { ClashApi(it.ctrlPort, it.secret) }
@@ -163,6 +168,7 @@ object ZephyrState {
             return
         }
         _status.value = CoreStatus(stage = CoreStage.STARTING)
+        notifyTile()
         val intent = Intent(context, ZephyrVpnService::class.java)
             .setAction(ZephyrVpnService.ACTION_START)
         runCatching { context.startForegroundService(intent) }
@@ -182,12 +188,14 @@ object ZephyrState {
             stage = CoreStage.RUNNING,
             startedAt = System.currentTimeMillis() / 1000,
         )
+        notifyTile()
         startPolling()
     }
 
     fun onCoreFailed(message: String) {
         stopPolling()
         _status.value = CoreStatus(stage = CoreStage.FAILED, lastError = message)
+        notifyTile()
         pushLog(message, LogLevel.ERROR)
         toast(message)
     }
@@ -198,11 +206,18 @@ object ZephyrState {
         if (_status.value.stage != CoreStage.FAILED) {
             _status.value = CoreStatus(stage = CoreStage.STOPPED)
         }
+        notifyTile()
         _connections.value = ConnectionsResponse()
         _rules.value = emptyList()
         _memory.value = 0
         _traffic.value = List(TRAFFIC_HISTORY) { TrafficSample() }
         refreshLocalProxies()
+    }
+
+    private fun notifyTile() {
+        if (::appContext.isInitialized) {
+            dev.zephyr.mobile.vpn.ZephyrTileService.requestUpdate(appContext)
+        }
     }
 
     // ------------------------------------------------------------ polling
@@ -377,6 +392,7 @@ object ZephyrState {
     fun selectProfile(uid: String) {
         updateSettings { it.copy(currentProfile = uid) }
         refreshLocalProxies()
+        notifyTile()
         if (_status.value.running) toast("重新连接后生效")
     }
 
