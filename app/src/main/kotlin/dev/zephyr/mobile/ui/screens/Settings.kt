@@ -241,38 +241,23 @@ fun SettingsScreen(
 
         item {
             ZCard {
-                CardHeader("关于", description = "这个应用做了什么，没做什么")
+                CardHeader("关于", description = "应用信息与开源许可")
+                InfoRow("应用名称", "Zephyr")
+                HairLine()
                 InfoRow("界面版本", BuildConfig.VERSION_NAME)
                 HairLine()
-                InfoRow("内核", status.coreVersion ?: "未运行")
+                InfoRow("内核版本", status.coreVersion ?: "未运行")
                 HairLine()
-                InfoRow("状态", if (status.running) "运行中" else "已停止")
+                InfoRow("运行状态", if (status.running) "运行中" else "已停止")
                 HairLine()
-                Column(Modifier.padding(16.dp)) {
-                    Text("它只做三件事", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Z.ink)
-                    Spacer(Modifier.height(6.dp))
+                InfoRow("开源许可", "GPL-3.0 (MetaCubeX)")
+                HairLine()
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 13.dp)) {
                     Text(
-                        "下载你填的订阅地址、把流量交给 mihomo 内核、在本机读取内核状态显示出来。" +
-                            "没有应用内更新，没有统计上报，没有云端服务，不读取通讯录、位置、相册和已安装应用列表。" +
-                            "申请的权限一共五个：联网、读取网络状态、前台服务、特殊用途前台服务、发送通知。",
-                        fontSize = 12.5.sp,
+                        "基于 Mihomo 内核的轻量 Android 代理客户端。所有规则匹配与流量转发均在本地处理，纯本地运行，无遥测、无数据上报。",
+                        fontSize = 12.sp,
                         color = Z.muted,
-                        lineHeight = 19.sp,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "订阅只接受 https 地址，明文 http 只允许发往本机的内核接口。" +
-                            "订阅和配置保存在应用私有目录，系统备份已关闭，其他应用读不到。",
-                        fontSize = 12.5.sp,
-                        color = Z.muted,
-                        lineHeight = 19.sp,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "内核 mihomo 来自 MetaCubeX，按 GPL-3.0 授权；界面是自己写的。",
-                        style = MonoSmall,
-                        color = Z.muted,
-                        lineHeight = 17.sp,
+                        lineHeight = 18.sp,
                     )
                 }
             }
