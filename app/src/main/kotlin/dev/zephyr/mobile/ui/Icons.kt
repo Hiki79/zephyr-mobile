@@ -39,9 +39,9 @@ object ZIcon {
         "globe",
         "M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18",
         "M3 12h18",
-        "M12 3a13 9 0 0 1 0 18a13 9 0 0 1 0-18",
+        "M12 3a4.5 9 0 0 1 0 18a4.5 9 0 0 1 0-18",
     )
-    val Download = stroke("download", "M12 3v12", "M7 11l5 5l5-5", "M4 20h16")
+    val Download = stroke("download", "M12 3v13", "M7 11l5 5l5-5", "M4 20h16")
     val Terminal = stroke("terminal", "M5 7l4 4l-4 4", "M12 16h7")
     val Sliders = stroke(
         "sliders",
@@ -67,7 +67,7 @@ object ZIcon {
         "route",
         "M6 4a2 2 0 1 0 0 4a2 2 0 1 0 0-4",
         "M18 16a2 2 0 1 0 0 4a2 2 0 1 0 0-4",
-        "M6 8v4a4 4 0 0 0 4 4h4",
+        "M6 8v4a4 4 0 0 0 4 4h8",
     )
     val Shield = stroke("shield", "M12 3l8 3v6c0 5-4 8-8 9c-4-1-8-4-8-9V6z")
     val ListChecks = stroke(

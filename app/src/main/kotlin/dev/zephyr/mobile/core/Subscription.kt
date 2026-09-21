@@ -2,11 +2,15 @@ package dev.zephyr.mobile.core
 
 import dev.zephyr.mobile.data.Profile
 import dev.zephyr.mobile.data.Store
+import java.net.InetAddress
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 
 /**
  * Fetching a subscription is the only request this app makes to the public
@@ -19,6 +23,7 @@ object Subscription {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .followRedirects(true)
+        .dns(ResilientDns)
         .build()
 
     class FetchError(message: String) : Exception(message)
@@ -61,7 +66,13 @@ object Subscription {
                     )
                 }
             }.getOrElse { error ->
-                throw if (error is FetchError) error else FetchError("下载失败：${error.message ?: error::class.simpleName}")
+                throw when (error) {
+                    is FetchError -> error
+                    is UnknownHostException -> FetchError(
+                        "域名解析失败：本机 DNS 和加密 DNS 都查不到 ${request.url.host}，检查订阅地址或换个网络",
+                    )
+                    else -> FetchError("下载失败：${error.message ?: error::class.simpleName}")
+                }
             }
 
             if (body.isBlank()) throw FetchError("订阅内容为空")
@@ -130,6 +141,77 @@ object Subscription {
             val trimmed = line.trimStart()
             trimmed.startsWith("- {") || trimmed.startsWith("- name:")
         }
+
+    /**
+     * System DNS first; when it comes back empty — the usual symptom of a
+     * poisoned resolver, which airport domains attract — the question is asked
+     * again over HTTPS to AliDNS and DNSPod. Their own hostnames resolve from
+     * pinned addresses so a broken system resolver cannot take the fallback
+     * down with it; the certificate is still checked against the hostname.
+     */
+    private object ResilientDns : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            try {
+                val addresses = Dns.SYSTEM.lookup(hostname)
+                if (addresses.isNotEmpty()) return addresses
+            } catch (_: UnknownHostException) {
+                // fall through to the DoH fallback
+            }
+            val fallback = dohLookup(hostname)
+            if (fallback.isNotEmpty()) return fallback
+            throw UnknownHostException("$hostname: system DNS and DoH both empty")
+        }
+    }
+
+    private val dohEndpoints = listOf(
+        "https://dns.alidns.com/resolve" to "1",
+        "https://doh.pub/dns-query" to "A",
+    )
+
+    private val dohBootstrap = mapOf(
+        "dns.alidns.com" to listOf("223.5.5.5", "223.6.6.6"),
+        "doh.pub" to listOf("119.29.29.29", "1.12.12.12"),
+    )
+
+    private val dohClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .dns { hostname ->
+            dohBootstrap[hostname]?.map(InetAddress::getByName) ?: Dns.SYSTEM.lookup(hostname)
+        }
+        .build()
+
+    private val ipv4 = Regex("""^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$""")
+
+    /** dns-json from either provider; only validated A records are returned. */
+    private fun dohLookup(hostname: String): List<InetAddress> {
+        for ((base, type) in dohEndpoints) {
+            val addresses = runCatching {
+                val request = Request.Builder()
+                    .url("$base?name=$hostname&type=$type")
+                    .header("accept", "application/dns-json")
+                    .get()
+                    .build()
+                dohClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use emptyList()
+                    val answers = JSONObject(response.body?.string().orEmpty())
+                        .optJSONArray("Answer") ?: return@use emptyList()
+                    buildList {
+                        for (index in 0 until answers.length()) {
+                            val answer = answers.optJSONObject(index) ?: continue
+                            if (answer.optInt("type") != 1) continue
+                            val data = answer.optString("data")
+                            val match = ipv4.matchEntire(data) ?: continue
+                            if (match.groupValues.drop(1).any { it.toInt() > 255 }) continue
+                            add(InetAddress.getByName(data))
+                        }
+                    }
+                }
+            }.getOrElse { emptyList() }
+            if (addresses.isNotEmpty()) return addresses
+        }
+        return emptyList()
+    }
 
     private const val USER_AGENT = "clash-verge/v2.0.0"
 }

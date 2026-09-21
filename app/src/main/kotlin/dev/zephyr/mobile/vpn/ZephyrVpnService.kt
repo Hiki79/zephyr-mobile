@@ -146,6 +146,11 @@ class ZephyrVpnService : VpnService() {
                 .addRoute("::", 0)
         }
 
+        // The app itself stays out of the tunnel: subscription updates and the
+        // REST API must not depend on the health of the tunnel they control,
+        // and the core has no business proxying its own owner's traffic.
+        runCatching { builder.addDisallowedApplication(packageName) }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             builder.setMetered(false)
         }
