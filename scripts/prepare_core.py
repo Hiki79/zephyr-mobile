@@ -3,8 +3,10 @@
 Never edit the shared Go module cache. The generated module is ignored by Git.
 """
 import json
+import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import shutil as shell
 
@@ -66,6 +68,9 @@ def main():
         source = Path(resolved["Dir"])
     # copy2 would retain the module cache's read-only permission bits.
     shutil.copytree(source, TARGET, dirs_exist_ok=True, copy_function=shutil.copyfile)
+    for path in TARGET.rglob("*"):
+        if path.is_file() and not os.access(path, os.W_OK):
+            path.chmod(path.stat().st_mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
 
     path = TARGET / "component/http/http.go"
     text = path.read_text(encoding="utf-8")
