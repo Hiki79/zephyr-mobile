@@ -25,9 +25,14 @@ def ensure_import(text, line):
         return text
     if text.count(line) > 1:
         raise RuntimeError(f"Unexpected duplicate import in upstream: {line!r}")
-    start = text.index("import (") + len("import (")
-    head, tail = text[:start], text[start:]
-    return head + "\n" + line + tail
+    start = text.index("import (")
+    end = text.index(")\n", start)
+    block = text[start:end]
+    lines = block.splitlines()
+    lines.append(line.rstrip("\n"))
+    lines[1:] = sorted(lines[1:])
+    head, tail = text[:start], text[end:]
+    return head + "\n".join(lines) + tail
 
 
 def guarded(func):
