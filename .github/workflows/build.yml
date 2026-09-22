@@ -49,6 +49,9 @@ jobs:
         working-directory: core
         run: |
           set -eux
+          cd ..
+          python scripts/prepare_core.py
+          cd core
           go mod tidy
           go mod download
 
@@ -190,3 +193,4 @@ jobs:
           if-no-files-found: error
           archive: false
           retention-days: 30
+
