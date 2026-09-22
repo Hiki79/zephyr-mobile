@@ -130,6 +130,9 @@ jobs:
           name: zephyrcore-aar
           path: app/libs
 
+      - name: Regenerate patched upstream
+        run: python scripts/prepare_core.py
+
       - name: Build (unsigned)
         run: gradle --no-daemon --stacktrace assembleRelease
 
