@@ -66,11 +66,18 @@ def main():
         if "Dir" not in resolved:
             raise RuntimeError(resolved)
         source = Path(resolved["Dir"])
-    # copy2 would retain the module cache's read-only permission bits.
-    shutil.copytree(source, TARGET, dirs_exist_ok=True, copy_function=shutil.copyfile)
-    for path in TARGET.rglob("*"):
-        if path.is_file() and not os.access(path, os.W_OK):
-            path.chmod(path.stat().st_mode | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+    # copytree keeps the module cache's read-only mode unless we override it.
+    def copy_file(src, dst, *, follow_symlinks=True):
+        shutil.copyfile(src, dst, follow_symlinks=follow_symlinks)
+        os.chmod(dst, 0o666)
+        return dst
+    for directory in (TARGET, *TARGET.rglob("*")):
+        if directory.is_dir():
+            os.chmod(directory, 0o777)
+    shutil.copytree(source, TARGET, dirs_exist_ok=True, copy_function=copy_file)
+    for directory in (TARGET, *TARGET.rglob("*")):
+        if directory.is_dir():
+            os.chmod(directory, 0o777)
 
     path = TARGET / "component/http/http.go"
     text = path.read_text(encoding="utf-8")
