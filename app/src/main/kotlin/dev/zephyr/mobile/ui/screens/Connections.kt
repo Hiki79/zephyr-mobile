@@ -12,7 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,8 +35,8 @@ import dev.zephyr.mobile.ui.formatBytes
 
 @Composable
 fun ConnectionsScreen(onBack: () -> Unit) {
-    val data by ZephyrState.connections.collectAsState()
-    val status by ZephyrState.status.collectAsState()
+    val data by ZephyrState.connections.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
     val list = data.connections.orEmpty().sortedByDescending { it.download + it.upload }
 
     LazyColumn(

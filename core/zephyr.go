@@ -14,6 +14,7 @@ package zephyrcore
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strings"
@@ -22,13 +23,19 @@ import (
 
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/config"
+	"github.com/metacubex/mihomo/dns"
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
+	"github.com/metacubex/mihomo/hub/route"
 	"github.com/metacubex/mihomo/listener"
 	lc "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/sing_tun"
 	"github.com/metacubex/mihomo/tunnel"
+	"github.com/metacubex/mihomo/tunnel/statistic"
+	"github.com/metacubex/mihomo/ntp/ntp"
+
+	"golang.org/x/sys/unix"
 )
 
 // Protector is implemented in Kotlin by the VpnService. Every socket the core
@@ -89,11 +96,24 @@ func Start(home string, configYAML string, tunFd int32, gateway string, dnsHijac
 		return fmt.Errorf("parse config: %w", err)
 	}
 	if err := applyTun(cfg, int(tunFd), gateway, dnsHijack); err != nil {
+		closeProviders(cfg)
 		closeFd(tunFd)
 		dialer.DefaultSocketHook = nil
 		return err
 	}
 
+	// Enforce listener policy again at the native boundary.
+	cfg.General.ShadowSocksConfig = ""
+	cfg.General.VmessConfig = ""
+	cfg.General.TuicServer = lc.TuicServer{}
+	cfg.General.GeoAutoUpdate = false
+	if cfg.DNS != nil {
+		cfg.DNS.Listen = ""
+	}
+	if cfg.NTP != nil {
+		cfg.NTP.Enable = false
+	}
+	route.SetEmbedMode(true)
 	hub.ApplyConfig(cfg)
 
 	// ReCreateTun reports failure by logging and clearing Enable rather than
@@ -127,11 +147,36 @@ func Stop() {
 }
 
 func shutdownCore() {
+	tunnel.OnSuspend()
+	for _, provider := range tunnel.Providers() { closeResource(provider) }
+	for _, provider := range tunnel.RuleProviders() { closeResource(provider) }
+	ntp.ReCreateNTPService("", 0, "", nil, false)
+	route.CloseServers()
+	dns.ReCreateServer("", nil, nil)
 	// Cleanup alone leaves LastTunConf enabled. Android can reuse the same fd,
 	// in which case the next ReCreateTun would skip creating a listener entirely.
 	listener.ReCreateTun(lc.Tun{}, tunnel.Tunnel)
 	listener.ReCreateMixed(0, tunnel.Tunnel)
+	listener.ReCreateHTTP(0, tunnel.Tunnel)
+	listener.ReCreateSocks(0, tunnel.Tunnel)
+	listener.ReCreateRedir(0, tunnel.Tunnel)
+	listener.ReCreateTProxy(0, tunnel.Tunnel)
+	listener.ReCreateShadowSocks("", tunnel.Tunnel)
+	listener.ReCreateVmess("", tunnel.Tunnel)
+	listener.ReCreateTuic(lc.TuicServer{}, tunnel.Tunnel)
+	statistic.DefaultManager.Range(func(connection statistic.Tracker) bool { _ = connection.Close(); return true })
 	executor.Shutdown()
+	tunnel.UpdateProxies(nil, nil)
+	tunnel.UpdateRules(nil, nil, nil)
+}
+
+func closeResource(value any) {
+	if closer, ok := value.(io.Closer); ok { _ = closer.Close() }
+}
+
+func closeProviders(cfg *config.Config) {
+	for _, provider := range cfg.Providers { closeResource(provider) }
+	for _, provider := range cfg.RuleProviders { closeResource(provider) }
 }
 
 // Running reports whether Start has succeeded and Stop has not yet run.
@@ -143,7 +188,7 @@ func Running() bool {
 
 // closeFd releases a descriptor the TUN listener never got to own.
 func closeFd(fd int32) {
-	_ = syscall.Close(int(fd))
+	_ = unix.Close(int(fd))
 }
 
 // applyTun overwrites whatever the subscription said about tun. Routing and the

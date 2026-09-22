@@ -10,12 +10,16 @@ import dev.zephyr.mobile.data.RulesResponse
 import dev.zephyr.mobile.data.TrafficSample
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.launch
+import okhttp3.Callback
+import okhttp3.Call
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
@@ -43,39 +47,38 @@ class ClashApi(private val port: Int, private val secret: String) {
             .url(base + path)
             .header("Authorization", "Bearer $secret")
 
-    private suspend fun text(path: String, readTimeoutSeconds: Long = 8): String? =
+    private suspend fun text(path: String, readTimeoutSeconds: Long = 8): String =
         withContext(Dispatchers.IO) {
-            runCatching {
-                clientWithReadTimeout(readTimeoutSeconds)
-                    .newCall(builder(path).get().build())
-                    .execute()
-                    .use { response -> if (response.isSuccessful) response.body?.string().orEmpty() else null }
-            }.getOrNull()
+            clientWithReadTimeout(readTimeoutSeconds)
+                .newCall(builder(path).get().build()).readResponse { response ->
+                    if (!response.isSuccessful) throw IOException("控制接口返回 ${response.code}")
+                    response.body?.boundedText(32L * 1024 * 1024) ?: throw IOException("控制接口返回为空")
+                }
         }
 
     private suspend fun send(path: String, method: String, body: String?): Boolean =
         withContext(Dispatchers.IO) {
-            runCatching {
                 val payload = (body ?: "").toRequestBody(JSON_MEDIA)
                 val request = builder(path)
                     .method(method, if (method == "DELETE" && body == null) null else payload)
                     .build()
-                shared.newCall(request).execute().use(Response::isSuccessful)
-            }.getOrElse { false }
+                shared.newCall(request).readResponse { response ->
+                    if (!response.isSuccessful) throw IOException("操作失败：${response.code}")
+                    true
+                }
         }
 
     /** Confirms the core is actually answering, and reports which build it is. */
     suspend fun version(): String? {
-        val body = text("/version", readTimeoutSeconds = 3) ?: return null
+        val body = try { text("/version", readTimeoutSeconds = 3) }
+            catch (error: IOException) { return null }
         return runCatching {
             json.decodeFromString<JsonObject>(body)["version"]?.jsonPrimitive?.content
         }.getOrNull()
     }
 
     suspend fun proxies(): Map<String, ProxyItem> {
-        val body = text("/proxies") ?: return emptyMap()
-        return runCatching { json.decodeFromString<ProxiesResponse>(body).proxies }
-            .getOrElse { emptyMap() }
+        return json.decodeFromString<ProxiesResponse>(text("/proxies")).proxies
     }
 
     suspend fun selectNode(group: String, node: String): Boolean =
@@ -84,22 +87,15 @@ class ClashApi(private val port: Int, private val secret: String) {
     /** Tests a whole group at once; the core returns a name to latency map. */
     suspend fun groupDelay(group: String, testUrl: String, timeoutMillis: Int = 5000): Map<String, Int> {
         val path = "/group/${encode(group)}/delay?timeout=$timeoutMillis&url=${encode(testUrl)}"
-        val body = text(path, readTimeoutSeconds = (timeoutMillis / 1000L) + 20) ?: return emptyMap()
-        return runCatching {
-            json.decodeFromString<Map<String, Int>>(body)
-        }.getOrElse { emptyMap() }
+        return json.decodeFromString(text(path, readTimeoutSeconds = (timeoutMillis / 1000L) + 20))
     }
 
     suspend fun rules(): List<Rule> {
-        val body = text("/rules") ?: return emptyList()
-        return runCatching { json.decodeFromString<RulesResponse>(body).rules }
-            .getOrElse { emptyList() }
+        return json.decodeFromString<RulesResponse>(text("/rules")).rules
     }
 
     suspend fun connections(): ConnectionsResponse {
-        val body = text("/connections") ?: return ConnectionsResponse()
-        return runCatching { json.decodeFromString<ConnectionsResponse>(body) }
-            .getOrElse { ConnectionsResponse() }
+        return json.decodeFromString(text("/connections"))
     }
 
     suspend fun closeConnection(id: String): Boolean =
@@ -123,17 +119,26 @@ class ClashApi(private val port: Int, private val secret: String) {
         runCatching { json.decodeFromString<MemorySample>(line) }.getOrNull()
     }
 
-    private fun <T> lineFlow(path: String, parse: (String) -> T?): Flow<T> = flow {
-        streaming.newCall(builder(path).get().build()).execute().use { response ->
-            if (!response.isSuccessful) return@use
-            val source = response.body?.source() ?: return@use
-            while (!source.exhausted()) {
-                val line = source.readUtf8Line() ?: break
-                if (line.isBlank()) continue
-                parse(line)?.let { emit(it) }
-            }
+    private fun <T> lineFlow(path: String, parse: (String) -> T?): Flow<T> = callbackFlow {
+        val call = streaming.newCall(builder(path).get().build())
+        val reader = launch(Dispatchers.IO) {
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("统计接口返回 ${response.code}")
+                    val source = response.body?.source() ?: throw IOException("统计数据为空")
+                    while (true) {
+                        val line = source.readUtf8Line() ?: break
+                        parse(line)?.let { send(it) }
+                    }
+                }
+                close(IOException("统计连接已结束"))
+            } catch (error: Exception) { close(error) }
         }
-    }.flowOn(Dispatchers.IO)
+        awaitClose {
+            call.cancel()
+            reader.cancel()
+        }
+    }
 
     /**
      * mihomo serves /logs over WebSocket only, and it reads the token from the
@@ -154,7 +159,12 @@ class ClashApi(private val port: Int, private val secret: String) {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                close()
+                close(IOException("日志连接已结束"))
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(code, reason)
+                close(IOException("日志连接已关闭"))
             }
         })
         awaitClose { socket.cancel() }
@@ -164,7 +174,8 @@ class ClashApi(private val port: Int, private val secret: String) {
         if (seconds == DEFAULT_READ_TIMEOUT) {
             shared
         } else {
-            shared.newBuilder().readTimeout(seconds, TimeUnit.SECONDS).build()
+            shared.newBuilder().readTimeout(seconds, TimeUnit.SECONDS)
+                .callTimeout(seconds + 5, TimeUnit.SECONDS).build()
         }
 
     companion object {
@@ -182,12 +193,14 @@ class ClashApi(private val port: Int, private val secret: String) {
             .connectTimeout(3, TimeUnit.SECONDS)
             .readTimeout(DEFAULT_READ_TIMEOUT, TimeUnit.SECONDS)
             .writeTimeout(5, TimeUnit.SECONDS)
+            .callTimeout(13, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false)
             .build()
 
         /** Long-lived streams must never time out mid-flight. */
         private val streaming: OkHttpClient = shared.newBuilder()
-            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .callTimeout(0, TimeUnit.MILLISECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
             .build()
 

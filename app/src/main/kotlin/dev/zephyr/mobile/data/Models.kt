@@ -23,7 +23,6 @@ data class Settings(
     val currentProfile: String? = null,
     /** Groups the overview's routing card shows; empty means the first few. */
     val pinnedGroups: List<String> = emptyList(),
-    val autoUpdateHours: Int = 24,
 )
 
 /** One subscription. The traffic counters come from the provider's own header. */
@@ -39,6 +38,7 @@ data class Profile(
     val expire: Long = 0,
     val home: String? = null,
     val nodeCount: Int = 0,
+    val configId: String? = null,
 )
 
 @Serializable
@@ -137,6 +137,9 @@ data class CoreStatus(
     val startedAt: Long = 0,
     val coreVersion: String? = null,
     val lastError: String? = null,
+    val monitoringError: String? = null,
+    val runtimeSettings: Settings? = null,
+    val profileName: String? = null,
 ) {
     val running: Boolean get() = stage == CoreStage.RUNNING
 }

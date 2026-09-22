@@ -78,4 +78,21 @@ class ProfileConfigTest {
         assertThrows(IllegalArgumentException::class.java) { ConfigBuilder.build(null, Settings()) }
         assertThrows(IllegalArgumentException::class.java) { ConfigBuilder.build("", Settings()) }
     }
+
+    @Test fun providerMetadataMustUseHttps() {
+        val insecure = """
+            proxy-providers:
+              remote: {type: http, url: "http://example.com/nodes"}
+            proxy-groups: [{name: remote, type: select, use: [remote]}]
+        """.trimIndent()
+        assertThrows(IllegalArgumentException::class.java) { ProfileConfig.parse(insecure) }
+        assertThrows(IllegalArgumentException::class.java) {
+            ConfigBuilder.build(insecure, Settings(secret = "test"))
+        }
+    }
+
+    @Test fun embeddedDnsListenerIsDisabled() {
+        val yaml = ConfigBuilder.build(config + "\ndns:\n  enable: true\n  listen: 0.0.0.0:53", Settings(secret = "test"))
+        assertEquals("", (ConfigBuilder.parseToMap(yaml)["dns"] as Map<*, *>)["listen"])
+    }
 }

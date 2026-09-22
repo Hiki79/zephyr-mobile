@@ -15,7 +15,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,13 +38,13 @@ import dev.zephyr.mobile.ui.ZSwitch
 
 @Composable
 fun LogsScreen() {
-    val logs by ZephyrState.logs.collectAsState()
-    val status by ZephyrState.status.collectAsState()
+    val logs by ZephyrState.logs.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
 
     var follow by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(logs.size, follow) {
+    LaunchedEffect(logs.lastOrNull()?.id, follow) {
         if (follow && logs.isNotEmpty()) {
             listState.scrollToItem(logs.lastIndex)
         }

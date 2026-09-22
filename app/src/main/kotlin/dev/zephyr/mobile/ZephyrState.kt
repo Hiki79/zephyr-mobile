@@ -34,7 +34,15 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -49,7 +57,7 @@ object ZephyrState {
     private const val TRAFFIC_HISTORY = 60
     private const val MAX_LOGS = 600
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val logSeq = AtomicLong(0)
 
     lateinit var store: Store
@@ -88,7 +96,12 @@ object ZephyrState {
     // Touched from the main thread and from the service's IO coroutine, so
     // every access goes through the lock below.
     private val pollJobs = mutableListOf<Job>()
-    @Volatile private var runtimeSettings: Settings? = null
+    private val dataLock = Mutex()
+    private val commandLock = Mutex()
+    private var session = 0L
+    private val monitorFailures = mutableSetOf<String>()
+    private val _uiVisible = MutableStateFlow(0)
+    private var loaded = false
 
     lateinit var appContext: Context
         private set
@@ -97,19 +110,27 @@ object ZephyrState {
         if (::store.isInitialized) return
         appContext = context.applicationContext
         store = Store(appContext)
-        _settings.value = store.loadSettings()
-        _profiles.value = store.loadProfiles()
+        try {
+            val saved = store.loadState()
+            _settings.value = saved.settings
+            _profiles.value = saved.profiles
+            loaded = true
+            store.recoveryNotice?.let { pushLog(it, LogLevel.WARN) }
+        } catch (error: Exception) {
+            _status.value = CoreStatus(stage = CoreStage.FAILED, lastError = error.message)
+            pushLog(error.message ?: "配置读取失败", LogLevel.ERROR)
+        }
         refreshLocalProxies()
         notifyTile()
     }
 
-    fun api(): ClashApi = (runtimeSettings ?: _settings.value).let { ClashApi(it.ctrlPort, it.secret) }
+    fun api(): ClashApi = (_status.value.runtimeSettings ?: _settings.value).let { ClashApi(it.ctrlPort, it.secret) }
 
     private fun refreshLocalProxies() {
         if (_status.value.running || _status.value.stage == CoreStage.STARTING) return
         val uid = _settings.value.currentProfile
         scope.launch(Dispatchers.IO) {
-            val preview = store.readProfileYaml(uid)?.let { yaml ->
+            val preview = store.readProfileYaml(_profiles.value.find { it.uid == uid }?.configId ?: uid)?.let { yaml ->
                 runCatching { ProfileConfig.parse(yaml) }.getOrElse {
                     pushLog("订阅预览失败：${it.message ?: it.javaClass.simpleName}", LogLevel.ERROR)
                     null
@@ -117,9 +138,6 @@ object ZephyrState {
             }
             if (_settings.value.currentProfile == uid && !_status.value.running && _status.value.stage != CoreStage.STARTING) {
                 _proxies.value = preview?.proxies.orEmpty()
-                if (preview != null) {
-                    _profiles.update { items -> items.map { if (it.uid == uid) it.copy(nodeCount = preview.nodeCount) else it } }
-                }
             }
         }
     }
@@ -128,26 +146,65 @@ object ZephyrState {
         _toasts.tryEmit(message)
     }
 
-    // ------------------------------------------------------------ settings
-
-    fun updateSettings(transform: (Settings) -> Settings) {
-        val next = transform(_settings.value)
-        _settings.value = next
-        store.saveSettings(next)
+    fun setUiVisible(visible: Boolean) {
+        _uiVisible.update { count -> if (visible) count + 1 else (count - 1).coerceAtLeast(0) }
     }
 
-    /**
-     * Mode is the one setting the core can change while running, so it is
-     * pushed over the API instead of forcing a reconnect.
-     */
+    // ------------------------------------------------------------ settings
+
+    private suspend fun persist(settings: Settings = _settings.value, profiles: List<Profile> = _profiles.value) {
+        check(loaded) { "本地配置未成功读取，已保留原文件" }
+        withContext(Dispatchers.IO) { store.saveState(settings, profiles) }
+        _settings.value = settings
+        _profiles.value = profiles
+    }
+
+    private suspend fun attempt(message: String, block: suspend () -> Unit) {
+        try { block() }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (error: Exception) {
+            val detail = "$message：${error.message ?: error.javaClass.simpleName}"
+            pushLog(detail, LogLevel.ERROR)
+            toast(detail)
+        }
+    }
+
+    fun updateSettings(onSaved: () -> Unit = {}, transform: (Settings) -> Settings) {
+        scope.launch {
+            attempt("保存失败") {
+                dataLock.withLock { persist(settings = transform(_settings.value)) }
+                onSaved()
+            }
+        }
+    }
+
     fun setMode(mode: String) {
-        val previous = _settings.value.mode
-        updateSettings { it.copy(mode = mode) }
-        if (_status.value.running) {
-            scope.launch {
-                if (!api().patchMode(mode)) {
-                    if (_settings.value.mode == mode) updateSettings { it.copy(mode = previous) }
-                    toast("模式切换失败，请重试")
+        if (mode !in listOf("rule", "global", "direct")) return
+        if (_status.value.stage == CoreStage.STARTING) {
+            toast("连接完成后再切换模式")
+            return
+        }
+        val expected = session
+        scope.launch {
+            commandLock.withLock command@{
+                if (expected != session) return@command
+                attempt("模式切换失败") {
+                    dataLock.withLock data@{
+                        if (_status.value.stage == CoreStage.STARTING) error("连接完成后再切换模式")
+                        val previous = _settings.value.mode
+                        val running = _status.value.running
+                        val controller = api()
+                        if (running && !controller.patchMode(mode)) error("控制接口拒绝切换")
+                        if (expected != session) return@data
+                        if (running) _status.update { it.copy(runtimeSettings = it.runtimeSettings?.copy(mode = mode)) }
+                        try { persist(settings = _settings.value.copy(mode = mode)) }
+                        catch (error: Exception) {
+                            if (running && expected == session && controller.patchMode(previous)) {
+                                _status.update { it.copy(runtimeSettings = it.runtimeSettings?.copy(mode = previous)) }
+                            }
+                            throw error
+                        }
+                    }
                 }
             }
         }
@@ -167,6 +224,8 @@ object ZephyrState {
             toast("请先选择一个订阅")
             return
         }
+        if (!loaded || dataLock.isLocked) { toast("请等待配置保存完成"); return }
+        session++
         _status.value = CoreStatus(stage = CoreStage.STARTING)
         notifyTile()
         val intent = Intent(context, ZephyrVpnService::class.java)
@@ -179,14 +238,16 @@ object ZephyrState {
         val intent = Intent(context, ZephyrVpnService::class.java)
             .setAction(ZephyrVpnService.ACTION_STOP)
         runCatching { context.startService(intent) }
+            .onFailure { toast("停止失败：${it.message}") }
     }
 
     /** Called by the service once the core reports itself healthy. */
     fun onCoreStarted(settings: Settings) {
-        runtimeSettings = settings
         _status.value = CoreStatus(
             stage = CoreStage.RUNNING,
             startedAt = System.currentTimeMillis() / 1000,
+            runtimeSettings = settings,
+            profileName = _profiles.value.find { it.uid == settings.currentProfile }?.name,
         )
         notifyTile()
         startPolling()
@@ -202,7 +263,7 @@ object ZephyrState {
 
     fun onCoreStopped() {
         stopPolling()
-        runtimeSettings = null
+        session++
         if (_status.value.stage != CoreStage.FAILED) {
             _status.value = CoreStatus(stage = CoreStage.STOPPED)
         }
@@ -222,88 +283,95 @@ object ZephyrState {
 
     // ------------------------------------------------------------ polling
 
+    private fun monitor(name: String, failed: Boolean) {
+        if (failed) monitorFailures += name else monitorFailures -= name
+        _status.update { it.copy(monitoringError = monitorFailures.takeIf { it.isNotEmpty() }
+            ?.joinToString("、", postfix = "暂不可用，正在重试")) }
+    }
+
+    /** Start a stream only while a visible UI actually observes its data. */
+    private fun <T> observeStream(
+        name: String, subscribers: StateFlow<Int>, stream: () -> Flow<T>, consume: (T) -> Unit,
+    ): Job = scope.launch {
+        subscribers.map { it > 0 }.distinctUntilChanged().collectLatest { visible ->
+            if (!visible) { monitor(name, false); return@collectLatest }
+            var backoff = 1_000L
+            while (currentCoroutineContext().isActive) {
+                try {
+                    stream().collect { value -> monitor(name, false); backoff = 1_000L; consume(value) }
+                } catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { }
+                monitor(name, true)
+                delay(backoff)
+                backoff = (backoff * 2).coerceAtMost(30_000L)
+            }
+        }
+    }
+
+    private fun pollVisible(name: String, subscribers: StateFlow<Int>, interval: Long, read: suspend () -> Unit): Job = scope.launch {
+        subscribers.map { it > 0 }.distinctUntilChanged().collectLatest { visible ->
+            if (!visible) { monitor(name, false); return@collectLatest }
+            while (currentCoroutineContext().isActive) {
+                try { read(); monitor(name, false) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { monitor(name, true) }
+                delay(interval)
+            }
+        }
+    }
+
     private fun startPolling() {
         stopPolling()
-        val api = api()
-        val jobs = mutableListOf<Job>()
-
-        jobs += scope.launch {
-            api.trafficFlow()
-                .catch { }
-                .collect { sample ->
-                    _traffic.value = (_traffic.value + sample).takeLast(TRAFFIC_HISTORY)
-                }
+        val controller = api()
+        pollJobs += observeStream("流量", _uiVisible, controller::trafficFlow) {
+            _traffic.value = (_traffic.value + it).takeLast(TRAFFIC_HISTORY)
         }
-
-        jobs += scope.launch {
-            api.memoryFlow().catch { }.collect { _memory.value = it.inUse }
+        pollJobs += observeStream("内存", _uiVisible, controller::memoryFlow) { _memory.value = it.inUse }
+        pollJobs += observeStream("日志", _uiVisible, { controller.logFlow(_status.value.runtimeSettings?.logLevel ?: "info") }) {
+            pushLog(it.payload, when (it.type.lowercase()) {
+                "error" -> LogLevel.ERROR
+                "warning", "warn" -> LogLevel.WARN
+                else -> LogLevel.INFO
+            })
         }
-
-        jobs += scope.launch {
-            api.logFlow(_settings.value.logLevel)
-                .catch { }
-                .collect { line ->
-                    val level = when (line.type.lowercase()) {
-                        "error" -> LogLevel.ERROR
-                        "warning", "warn" -> LogLevel.WARN
-                        else -> LogLevel.INFO
-                    }
-                    pushLog(line.payload, level)
-                }
-        }
-
-        // Version confirms the core is really answering, not just launched.
-        jobs += scope.launch {
-            repeat(20) {
-                val version = api.version()
-                if (version != null) {
-                    _status.value = _status.value.copy(coreVersion = version)
-                    return@launch
-                }
-                delay(300)
-            }
-        }
-
-        jobs += scope.launch {
+        pollJobs += pollVisible("节点", _uiVisible, 6_000) { _proxies.value = controller.proxies() }
+        pollJobs += pollVisible("连接", _uiVisible, 3_000) { _connections.value = controller.connections() }
+        pollJobs += pollVisible("规则", _uiVisible, 30_000) { _rules.value = controller.rules() }
+        // Lightweight health check remains active when every screen is closed.
+        pollJobs += scope.launch {
             while (isActive) {
-                _proxies.value = api.proxies()
-                delay(6_000)
+                val version = controller.version()
+                monitor("控制接口", version == null)
+                if (version != null) _status.update { it.copy(coreVersion = version) }
+                delay(30_000)
             }
         }
-
-        jobs += scope.launch {
-            while (isActive) {
-                _connections.value = api.connections()
-                delay(3_000)
-            }
-        }
-
-        jobs += scope.launch {
-            _rules.value = api.rules()
-        }
-
-        synchronized(pollJobs) { pollJobs += jobs }
     }
 
     private fun stopPolling() {
-        val stale = synchronized(pollJobs) {
-            val copy = pollJobs.toList()
-            pollJobs.clear()
-            copy
-        }
-        stale.forEach(Job::cancel)
+        pollJobs.forEach(Job::cancel)
+        pollJobs.clear()
+        monitorFailures.clear()
     }
 
     fun refreshProxies() {
-        if (!_status.value.running) {
-            refreshLocalProxies()
-            return
-        }
-        scope.launch { _proxies.value = api().proxies() }
+        if (!_status.value.running) { refreshLocalProxies(); return }
+        val expected = session
+        val controller = api()
+        scope.launch { attempt("刷新节点失败") {
+            val result = controller.proxies()
+            if (session == expected && _status.value.running) _proxies.value = result
+        } }
     }
 
     fun refreshRules() {
-        scope.launch { _rules.value = api().rules() }
+        if (!_status.value.running) return
+        val expected = session
+        val controller = api()
+        scope.launch { attempt("刷新规则失败") {
+            val result = controller.rules()
+            if (session == expected && _status.value.running) _rules.value = result
+        } }
     }
 
     fun pushLog(text: String, level: LogLevel) {
@@ -324,102 +392,120 @@ object ZephyrState {
     // ------------------------------------------------------------ proxies
 
     fun selectNode(group: String, node: String) {
-        if (!_status.value.running) {
-            toast("连接后可切换节点")
-            return
-        }
-        // Show the change at once, then let the next refresh confirm it.
-        _proxies.value = _proxies.value.toMutableMap().apply {
-            this[group]?.let { this[group] = it.copy(now = node) }
-        }
+        if (!_status.value.running) { toast("连接后可切换节点"); return }
+        val expected = session
+        val controller = api()
         scope.launch {
-            if (!api().selectNode(group, node)) {
-                toast("切换失败，节点可能已从订阅里移除")
+            commandLock.withLock command@{
+                if (expected != session || !_status.value.running) return@command
+                attempt("节点切换失败") {
+                    check(controller.selectNode(group, node)) { "控制接口拒绝切换" }
+                    val result = controller.proxies()
+                    if (expected == session && _status.value.running) _proxies.value = result
+                }
             }
-            _proxies.value = api().proxies()
         }
     }
 
     fun testGroup(group: String, onDone: () -> Unit = {}) {
+        val expected = session
+        val controller = api()
         scope.launch {
-            api().groupDelay(group, _settings.value.testUrl)
-            _proxies.value = api().proxies()
-            onDone()
+            try { attempt("测速失败") {
+                check(_status.value.running) { "请先连接" }
+                val result = controller.groupDelay(group, _settings.value.testUrl)
+                if (result.isEmpty()) toast("未测得可用延迟，请检查网络或节点")
+                val proxies = controller.proxies()
+                if (expected == session && _status.value.running) _proxies.value = proxies
+            } } finally { onDone() }
         }
     }
-
-    // ------------------------------------------------------------ profiles
 
     fun addProfile(url: String, onResult: (String?) -> Unit) {
         scope.launch {
             val uid = Store.newUid()
-            runCatching { Subscription.fetch(url, uid, store) }
-                .onSuccess { profile ->
-                    _profiles.value = _profiles.value + profile
-                    store.saveProfiles(_profiles.value)
-                    if (_settings.value.currentProfile == null) {
-                        updateSettings { it.copy(currentProfile = uid) }
-                    }
-                    refreshLocalProxies()
-                    onResult(null)
-                    toast("${profile.name} 已添加")
+            try {
+                val download = Subscription.fetch(url, uid)
+                dataLock.withLock {
+                    withContext(Dispatchers.IO) { store.writeProfileYaml(uid, download.yaml) }
+                    val next = if (_settings.value.currentProfile == null) _settings.value.copy(currentProfile = uid) else _settings.value
+                    persist(next, _profiles.value + download.profile)
                 }
-                .onFailure { error ->
-                    store.deleteProfileYaml(uid)
-                    onResult(error.message ?: "下载失败")
-                }
+                refreshLocalProxies()
+                onResult(null)
+                toast("${download.profile.name} 已添加")
+            } catch (cancel: CancellationException) { throw cancel }
+            catch (error: Exception) {
+                withContext(Dispatchers.IO) { store.deleteProfileYaml(uid) }
+                onResult(error.message ?: "添加失败")
+            }
         }
     }
 
+    private val updatingProfiles = mutableSetOf<String>()
+
     fun updateProfile(uid: String, onDone: () -> Unit = {}) {
         val existing = _profiles.value.find { it.uid == uid } ?: return onDone()
+        if (!updatingProfiles.add(uid)) return onDone()
         scope.launch {
-            runCatching { Subscription.fetch(existing.url, uid, store, keepName = existing.name) }
-                .onSuccess { fresh ->
-                    _profiles.value = _profiles.value.map { if (it.uid == uid) fresh else it }
-                    store.saveProfiles(_profiles.value)
-                    toast("${fresh.name} 已更新")
-                    refreshLocalProxies()
-                    if (_settings.value.currentProfile == uid && _status.value.running) {
-                        toast("重新连接后生效")
+            try { attempt("更新失败") {
+                val download = Subscription.fetch(existing.url, uid, keepName = existing.name)
+                dataLock.withLock {
+                    check(_profiles.value.any { it.uid == uid }) { "订阅已删除，更新已取消" }
+                    // New revisions get their own immutable YAML; commit its ID with the index.
+                    val revision = Store.newUid()
+                    withContext(Dispatchers.IO) { store.writeProfileYaml(revision, download.yaml) }
+                    try {
+                        val fresh = download.profile.copy(configId = revision)
+                        persist(profiles = _profiles.value.map { if (it.uid == uid) fresh else it })
+                    } catch (error: Exception) {
+                        withContext(Dispatchers.IO) { store.deleteProfileYaml(revision) }
+                        throw error
                     }
                 }
-                .onFailure { toast(it.message ?: "更新失败") }
-            onDone()
+                toast("${download.profile.name} 已更新" + if (_status.value.runtimeSettings?.currentProfile == uid) "，重新连接后生效" else "")
+                refreshLocalProxies()
+            } } finally { updatingProfiles.remove(uid); onDone() }
         }
     }
 
     fun selectProfile(uid: String) {
-        updateSettings { it.copy(currentProfile = uid) }
-        refreshLocalProxies()
-        notifyTile()
-        if (_status.value.running) toast("重新连接后生效")
+        scope.launch { attempt("切换订阅失败") {
+            dataLock.withLock {
+                check(_profiles.value.any { it.uid == uid }) { "订阅不存在" }
+                persist(settings = _settings.value.copy(currentProfile = uid))
+            }
+            refreshLocalProxies()
+            notifyTile()
+            if (_status.value.running) toast("已设为下次连接订阅，当前连接保持不变")
+        } }
     }
 
     fun deleteProfile(uid: String) {
-        _profiles.value = _profiles.value.filterNot { it.uid == uid }
-        store.saveProfiles(_profiles.value)
-        store.deleteProfileYaml(uid)
-        if (_settings.value.currentProfile == uid) {
-            updateSettings { it.copy(currentProfile = _profiles.value.firstOrNull()?.uid) }
-        }
-        refreshLocalProxies()
+        scope.launch { attempt("删除失败") {
+            dataLock.withLock {
+                val items = _profiles.value.filterNot { it.uid == uid }
+                val next = if (_settings.value.currentProfile == uid) _settings.value.copy(currentProfile = items.firstOrNull()?.uid) else _settings.value
+                persist(next, items)
+                // Revision files are retained for last-good-state recovery. They stay private.
+            }
+            refreshLocalProxies()
+            notifyTile()
+            toast("订阅已删除" + if (_status.value.runtimeSettings?.currentProfile == uid) "，当前会话将在断开时结束" else "")
+        } }
     }
 
-    // ------------------------------------------------------------ connections
-
-    fun closeConnection(id: String) {
-        scope.launch {
-            api().closeConnection(id)
-            _connections.value = api().connections()
-        }
-    }
-
-    fun closeAllConnections() {
-        scope.launch {
-            api().closeAllConnections()
-            _connections.value = api().connections()
-        }
+    fun closeConnection(id: String) = closeConnections(id)
+    fun closeAllConnections() = closeConnections(null)
+    private fun closeConnections(id: String?) {
+        if (!_status.value.running) return
+        val expected = session
+        val controller = api()
+        scope.launch { attempt("关闭连接失败") {
+            check(if (id == null) controller.closeAllConnections() else controller.closeConnection(id))
+            val result = controller.connections()
+            if (session == expected && _status.value.running) _connections.value = result
+        } }
     }
 
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)

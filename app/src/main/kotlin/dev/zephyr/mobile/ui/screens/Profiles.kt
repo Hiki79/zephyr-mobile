@@ -15,7 +15,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,8 +44,9 @@ import dev.zephyr.mobile.ui.percentOf
 
 @Composable
 fun ProfilesScreen() {
-    val profiles by ZephyrState.profiles.collectAsState()
-    val settings by ZephyrState.settings.collectAsState()
+    val profiles by ZephyrState.profiles.collectAsStateWithLifecycle()
+    val settings by ZephyrState.settings.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
 
     var adding by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -61,7 +62,7 @@ fun ProfilesScreen() {
             PageHeader(
                 kicker = "03 / PROFILES",
                 title = "订阅",
-                subtitle = "${profiles.size} 个订阅 · 只会连接你填的地址",
+                subtitle = "${profiles.size} 个订阅 · 配置保存在本机",
                 trailing = {
                     ZButton("添加", onClick = { adding = true; addError = null }, icon = ZIcon.Plus, primary = true)
                 },
@@ -92,6 +93,7 @@ fun ProfilesScreen() {
             ProfileCard(
                 profile = profile,
                 current = profile.uid == settings.currentProfile,
+                running = status.running && status.runtimeSettings?.currentProfile == profile.uid,
                 updating = updating == profile.uid,
                 onUse = { ZephyrState.selectProfile(profile.uid) },
                 onUpdate = {
@@ -124,7 +126,7 @@ fun ProfilesScreen() {
     deleting?.let { profile ->
         ConfirmDialog(
             title = "删除订阅",
-            message = "确定删除「${profile.name}」吗？本机保存的配置文件会一起删除，这个操作不能撤销。",
+            message = "确定删除「${profile.name}」吗？将从订阅列表移除；上次有效配置会在本机保留一份恢复备份。",
             confirmText = "删除",
             onDismiss = { deleting = null },
             onConfirm = {
@@ -139,6 +141,7 @@ fun ProfilesScreen() {
 private fun ProfileCard(
     profile: Profile,
     current: Boolean,
+    running: Boolean,
     updating: Boolean,
     onUse: () -> Unit,
     onUpdate: () -> Unit,
@@ -163,9 +166,9 @@ private fun ProfileCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (current) {
+                    if (current || running) {
                         Spacer(Modifier.width(8.dp))
-                        Tag("使用中", tone = Z.blueDark)
+                        Tag(if (running) "运行中" else "下次连接", tone = Z.blueDark)
                     }
                 }
                 Spacer(Modifier.height(3.dp))

@@ -21,7 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -76,33 +76,35 @@ fun OverviewScreen(
     onNavigateConnections: () -> Unit,
     onToggleVpn: (Boolean) -> Unit,
 ) {
-    val status by ZephyrState.status.collectAsState()
-    val settings by ZephyrState.settings.collectAsState()
-    val proxies by ZephyrState.proxies.collectAsState()
-    val traffic by ZephyrState.traffic.collectAsState()
-    val connections by ZephyrState.connections.collectAsState()
-    val memory by ZephyrState.memory.collectAsState()
-    val profiles by ZephyrState.profiles.collectAsState()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
+    val settings by ZephyrState.settings.collectAsStateWithLifecycle()
+    val proxies by ZephyrState.proxies.collectAsStateWithLifecycle()
+    val traffic by ZephyrState.traffic.collectAsStateWithLifecycle()
+    val connections by ZephyrState.connections.collectAsStateWithLifecycle()
+    val memory by ZephyrState.memory.collectAsStateWithLifecycle()
+    val profiles by ZephyrState.profiles.collectAsStateWithLifecycle()
+    val displayedSettings = status.runtimeSettings ?: settings
 
     var picking by remember { mutableStateOf(false) }
 
-    val groups = remember(proxies, settings.mode) { selectGroups(proxies, settings.mode) }
+    val groups = remember(proxies, displayedSettings.mode) { selectGroups(proxies, displayedSettings.mode) }
     val pinned = settings.pinnedGroups
     val summary = remember(groups, pinned) {
         if (pinned.isEmpty()) groups.take(DEFAULT_SUMMARY) else groups.filter { it.name in pinned }
     }
-    val currentProfile = profiles.find { it.uid == settings.currentProfile }
+    val currentProfile = profiles.find { it.uid == displayedSettings.currentProfile }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth().padding(horizontal = Z.gutter),
         verticalArrangement = Arrangement.spacedBy(13.dp),
     ) {
+        item { dev.zephyr.mobile.ui.SessionNotice() }
         item {
             PageHeader(
                 kicker = "01 / OVERVIEW",
                 title = "连接总览",
                 subtitle = buildString {
-                    append(currentProfile?.let { "当前订阅 ${it.name}" } ?: "尚未添加订阅")
+                    append((status.profileName ?: currentProfile?.name)?.let { "当前订阅 $it" } ?: "尚未添加订阅")
                     append(" · ")
                     append(
                         when (status.stage) {
@@ -116,7 +118,7 @@ fun OverviewScreen(
             )
         }
 
-        item { HeroCard(traffic, status.stage, settings.mixedPort) }
+        item { HeroCard(traffic, status.stage, displayedSettings.mixedPort) }
 
         item {
             ZCard {
@@ -138,21 +140,19 @@ fun OverviewScreen(
                     )
                 }
                 HairLine()
-                ControlRow(
-                    icon = ZIcon.Route,
-                    title = "出站模式",
-                    subtitle = when (settings.mode) {
+                Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                    Text("出站模式", fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold, color = Z.ink)
+                    Text(when (displayedSettings.mode) {
                         "global" -> "全部流量走当前节点"
                         "direct" -> "全部流量不走代理"
                         else -> "按规则分流，国内直连"
-                    },
-                    active = true,
-                ) {
-                    Segmented(
-                        value = settings.mode,
+                    }, fontSize = 11.5.sp, color = Z.muted)
+                    Spacer(Modifier.height(10.dp))
+                    Segmented(value = displayedSettings.mode,
                         options = listOf("rule" to "规则", "global" to "全局", "direct" to "直连"),
                         onChange = ZephyrState::setMode,
-                    )
+                        enabled = status.stage != CoreStage.STARTING,
+                        modifier = Modifier.fillMaxWidth(), equalWidth = true)
                 }
             }
         }
@@ -242,11 +242,12 @@ fun OverviewScreen(
             initial = summary.map { it.name },
             onDismiss = { picking = false },
             onSave = { chosen ->
-                ZephyrState.updateSettings { it.copy(pinnedGroups = chosen) }
-                picking = false
-                ZephyrState.toast(
-                    if (chosen.isEmpty()) "已恢复默认，显示前 $DEFAULT_SUMMARY 个分组"
-                    else "策略路由现在显示 ${chosen.size} 个分组",
+                ZephyrState.updateSettings(
+                    transform = { it.copy(pinnedGroups = chosen) },
+                    onSaved = {
+                        picking = false
+                        ZephyrState.toast(if (chosen.isEmpty()) "已恢复默认" else "分组显示已保存")
+                    },
                 )
             },
         )

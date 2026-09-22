@@ -82,7 +82,8 @@ class ZephyrVpnService : VpnService() {
 
     private suspend fun bringUp(attempt: Long) {
         val settings = ZephyrState.settings.value
-        val profileYaml = ZephyrState.store.readProfileYaml(settings.currentProfile)
+        val profile = ZephyrState.profiles.value.find { it.uid == settings.currentProfile }
+        val profileYaml = ZephyrState.store.readProfileYaml(profile?.configId ?: settings.currentProfile)
 
         val configYaml = runCatching { ConfigBuilder.build(profileYaml, settings) }
             .getOrElse { error ->

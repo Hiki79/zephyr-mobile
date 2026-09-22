@@ -3,7 +3,6 @@ package dev.zephyr.mobile.ui.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,13 +15,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,18 +49,20 @@ import dev.zephyr.mobile.ui.ZCard
 import dev.zephyr.mobile.ui.ZIcon
 import dev.zephyr.mobile.ui.ZSwitch
 import dev.zephyr.mobile.ui.ZTextField
+import dev.zephyr.mobile.ui.GroupSelector
 import dev.zephyr.mobile.ui.nodeMeta
 import dev.zephyr.mobile.ui.regionOf
 
 @Composable
 fun ProxiesScreen(onNavigateProfiles: () -> Unit, onConnect: () -> Unit) {
-    val proxies by ZephyrState.proxies.collectAsState()
-    val status by ZephyrState.status.collectAsState()
-    val settings by ZephyrState.settings.collectAsState()
-    val profiles by ZephyrState.profiles.collectAsState()
-    val currentProfile = profiles.find { it.uid == settings.currentProfile }
+    val proxies by ZephyrState.proxies.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
+    val settings by ZephyrState.settings.collectAsStateWithLifecycle()
+    val profiles by ZephyrState.profiles.collectAsStateWithLifecycle()
+    val displayedSettings = status.runtimeSettings ?: settings
+    val currentProfile = profiles.find { it.uid == displayedSettings.currentProfile }
 
-    val groups = remember(proxies, settings.mode) { selectGroups(proxies, settings.mode) }
+    val groups = remember(proxies, displayedSettings.mode) { selectGroups(proxies, displayedSettings.mode) }
     var activeName by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var hideDead by remember { mutableStateOf(false) }
@@ -129,6 +129,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit, onConnect: () -> Unit) {
         modifier = Modifier.fillMaxWidth().padding(horizontal = Z.gutter),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item { dev.zephyr.mobile.ui.SessionNotice() }
         item {
             PageHeader(
                 kicker = "02 / PROXIES",
@@ -154,21 +155,7 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit, onConnect: () -> Unit) {
         // scrolling row of chips instead, which keeps the same information
         // one tap away without stealing half the width.
         item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                groups.forEach { group ->
-                    GroupChip(
-                        group = group,
-                        selected = group.name == activeName,
-                        latency = groupLatency(proxies, group),
-                        onClick = { activeName = group.name },
-                    )
-                }
-            }
+            GroupSelector(groups, proxies, activeName) { activeName = it; query = "" }
         }
 
         item {
@@ -301,42 +288,6 @@ fun ProxiesScreen(onNavigateProfiles: () -> Unit, onConnect: () -> Unit) {
                 modifier = Modifier.padding(vertical = 6.dp),
             )
         }
-    }
-}
-
-@Composable
-private fun GroupChip(group: ProxyItem, selected: Boolean, latency: Int?, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .background(if (selected) Z.bluePale else Z.card, RoundedCornerShape(Z.radiusSm))
-            .border(
-                1.dp,
-                if (selected) Z.blueLine else Z.line,
-                RoundedCornerShape(Z.radiusSm),
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                group.name,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = if (selected) Z.blueDark else Z.ink,
-                maxLines = 1,
-            )
-            Spacer(Modifier.width(8.dp))
-            DelayPill(latency)
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(
-            group.now ?: group.type,
-            fontSize = 11.sp,
-            color = Z.muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(150.dp),
-        )
     }
 }
 

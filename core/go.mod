@@ -1,5 +1,7 @@
 module zephyrcore
 
+replace github.com/metacubex/mihomo => ./upstream
+
 go 1.26.0
 
 require github.com/metacubex/mihomo v1.19.31
@@ -141,3 +143,4 @@ require (
 	golang.org/x/tools v0.50.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
 )
+

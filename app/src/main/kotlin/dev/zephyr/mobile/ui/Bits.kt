@@ -2,6 +2,7 @@ package dev.zephyr.mobile.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -212,7 +214,7 @@ fun ZSwitch(
     onChange: (Boolean) -> Unit,
     enabled: Boolean = true,
 ) {
-    val knob by animateDpAsState(if (checked) 19.dp else 1.dp, label = "knob")
+    val knob by animateDpAsState(if (checked) 21.dp else 3.dp, animationSpec = tween(150), label = "knob")
     val track by animateColorAsState(
         when {
             !enabled -> Z.lineDark.copy(alpha = 0.5f)
@@ -223,25 +225,26 @@ fun ZSwitch(
     )
     Box(
         modifier = Modifier
-            .minimumInteractiveComponentSize()
+            .size(48.dp)
             .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange),
         contentAlignment = Alignment.Center,
     ) {
         Box(
             modifier = Modifier
-                .size(width = 40.dp, height = 22.dp)
-                .background(track, RoundedCornerShape(11.dp))
+                .size(width = 44.dp, height = 26.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(track, RoundedCornerShape(13.dp))
                 .border(
                     1.dp,
                     if (checked && enabled) Z.blueDark else Z.lineDark,
-                    RoundedCornerShape(11.dp),
+                    RoundedCornerShape(13.dp),
                 ),
         ) {
             Box(
                 Modifier
-                    .offset(x = knob, y = 1.dp)
-                    .size(18.dp)
-                    .background(Color.White, CircleShape),
+                    .offset(x = knob, y = 3.dp)
+                    .size(20.dp)
+                    .background(Color.White.copy(alpha = if (enabled) 1f else 0.7f), CircleShape),
             )
         }
     }
@@ -253,9 +256,12 @@ fun <T> Segmented(
     options: List<Pair<T, String>>,
     onChange: (T) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    equalWidth: Boolean = false,
 ) {
     Row(
         modifier = modifier
+            .clip(RoundedCornerShape(Z.radiusSm))
             .background(Z.card, RoundedCornerShape(Z.radiusSm))
             .border(1.dp, Z.lineDark, RoundedCornerShape(Z.radiusSm)),
     ) {
@@ -264,8 +270,9 @@ fun <T> Segmented(
             if (index > 0) Box(Modifier.width(1.dp).height(32.dp).background(Z.lineDark))
             Box(
                 modifier = Modifier
+                    .then(if (equalWidth) Modifier.weight(1f) else Modifier)
                     .background(if (active) Z.bluePale else Color.Transparent)
-                    .selectable(selected = active, role = Role.RadioButton) { onChange(optionValue) }
+                    .selectable(selected = active, enabled = enabled, role = Role.RadioButton) { onChange(optionValue) }
                     .defaultMinSize(minHeight = 32.dp)
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,

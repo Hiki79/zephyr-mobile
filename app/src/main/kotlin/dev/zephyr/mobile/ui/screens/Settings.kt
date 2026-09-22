@@ -12,7 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,8 +48,8 @@ fun SettingsScreen(
     onOpenConnections: () -> Unit,
     onOpenRules: () -> Unit,
 ) {
-    val settings by ZephyrState.settings.collectAsState()
-    val status by ZephyrState.status.collectAsState()
+    val settings by ZephyrState.settings.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
 
     var mixedPort by remember(settings.mixedPort) { mutableStateOf(settings.mixedPort.toString()) }
     var ctrlPort by remember(settings.ctrlPort) { mutableStateOf(settings.ctrlPort.toString()) }
@@ -73,9 +73,10 @@ fun SettingsScreen(
             ZephyrState.toast("两个端口不能相同")
             return
         }
-        ZephyrState.updateSettings { it.copy(mixedPort = mixed, ctrlPort = ctrl) }
-        ZephyrState.toast("端口已保存")
-        needsReconnect()
+        ZephyrState.updateSettings(
+            transform = { it.copy(mixedPort = mixed, ctrlPort = ctrl) },
+            onSaved = { ZephyrState.toast("端口已保存"); needsReconnect() },
+        )
     }
 
     LazyColumn(
@@ -120,7 +121,7 @@ fun SettingsScreen(
                         )
                     },
                 )
-                CardFoot(if (portsDirty) "端口改了还没保存" else "两个端口只在本机 127.0.0.1 上监听") {
+                CardFoot(if (portsDirty) "端口改了还没保存" else if (settings.allowLan) "混合端口允许局域网访问，控制端口仅限本机" else "两个端口只在本机 127.0.0.1 上监听") {
                     ZButton("保存端口", onClick = ::applyPorts, small = true, enabled = portsDirty)
                 }
                 HairLine()
@@ -131,8 +132,7 @@ fun SettingsScreen(
                         ZSwitch(
                             checked = settings.allowLan,
                             onChange = { next ->
-                                ZephyrState.updateSettings { it.copy(allowLan = next) }
-                                needsReconnect()
+                                ZephyrState.updateSettings(transform = { it.copy(allowLan = next) }, onSaved = ::needsReconnect)
                             },
                         )
                     },
@@ -145,8 +145,7 @@ fun SettingsScreen(
                         ZSwitch(
                             checked = settings.ipv6,
                             onChange = { next ->
-                                ZephyrState.updateSettings { it.copy(ipv6 = next) }
-                                needsReconnect()
+                                ZephyrState.updateSettings(transform = { it.copy(ipv6 = next) }, onSaved = ::needsReconnect)
                             },
                         )
                     },
@@ -159,8 +158,7 @@ fun SettingsScreen(
                         ZSwitch(
                             checked = settings.unifiedDelay,
                             onChange = { next ->
-                                ZephyrState.updateSettings { it.copy(unifiedDelay = next) }
-                                needsReconnect()
+                                ZephyrState.updateSettings(transform = { it.copy(unifiedDelay = next) }, onSaved = ::needsReconnect)
                             },
                         )
                     },
@@ -192,8 +190,10 @@ fun SettingsScreen(
                                     ZephyrState.toast("测速地址需要是一个网址")
                                     return@ZButton
                                 }
-                                ZephyrState.updateSettings { it.copy(testUrl = next) }
-                                ZephyrState.toast("测速地址已保存")
+                                ZephyrState.updateSettings(
+                                    transform = { it.copy(testUrl = next) },
+                                    onSaved = { ZephyrState.toast("测速地址已保存") },
+                                )
                             },
                             small = true,
                             enabled = testUrl.trim() != settings.testUrl,
@@ -209,8 +209,7 @@ fun SettingsScreen(
                             value = settings.logLevel,
                             options = listOf("warning" to "警告", "info" to "信息", "debug" to "调试"),
                             onChange = { next ->
-                                ZephyrState.updateSettings { it.copy(logLevel = next) }
-                                needsReconnect()
+                                ZephyrState.updateSettings(transform = { it.copy(logLevel = next) }, onSaved = ::needsReconnect)
                             },
                         )
                     },

@@ -10,6 +10,7 @@ __pycache__/
 
 # Built by CI with gomobile; never committed.
 app/libs/*.aar
+core/upstream/
 app/src/main/assets/geodata/
 
 # Signing material must never enter the repository.

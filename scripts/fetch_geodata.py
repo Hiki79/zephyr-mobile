@@ -1,5 +1,6 @@
 """Bundle upstream rule databases at an immutable revision, with verified digests."""
 import hashlib
+import json
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -25,6 +26,7 @@ def main():
             raise RuntimeError(f"Checksum mismatch: {source}")
         path.write_bytes(data)
         print(f"Verified {name} ({len(data)} bytes)")
+    (dest / "manifest.json").write_text(json.dumps({name: digest for name, digest in FILES.values()}), encoding="utf-8")
 
 if __name__ == "__main__":
     main()

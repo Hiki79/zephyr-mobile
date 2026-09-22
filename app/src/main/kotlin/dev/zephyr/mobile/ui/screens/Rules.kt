@@ -13,7 +13,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,8 +39,8 @@ import dev.zephyr.mobile.ui.ZTextField
 /** The core's rule table, in the order it evaluates them. Read-only, as on desktop. */
 @Composable
 fun RulesScreen(onBack: () -> Unit) {
-    val rules by ZephyrState.rules.collectAsState()
-    val status by ZephyrState.status.collectAsState()
+    val rules by ZephyrState.rules.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(status.running) {

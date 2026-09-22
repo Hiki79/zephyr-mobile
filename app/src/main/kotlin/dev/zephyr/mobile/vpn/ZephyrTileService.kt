@@ -114,7 +114,7 @@ class ZephyrTileService : TileService() {
             CoreStage.RUNNING -> {
                 tile.state = Tile.STATE_ACTIVE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = currentProfile?.name ?: getString(R.string.notif_connected)
+                    tile.subtitle = status.profileName ?: getString(R.string.notif_connected)
                 }
             }
             CoreStage.STARTING -> {

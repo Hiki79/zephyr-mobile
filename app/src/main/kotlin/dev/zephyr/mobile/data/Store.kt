@@ -21,6 +21,10 @@ class Store(context: Context) {
 
     private val settingsFile = File(root, "settings.json")
     private val profilesFile = File(root, "profiles.json")
+    private val stateFile = StateFile(File(root, "state.json"))
+    private var loadFailure: Throwable? = null
+    var recoveryNotice: String? = null
+        private set
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -28,30 +32,26 @@ class Store(context: Context) {
         prettyPrint = true
     }
 
-    fun loadSettings(): Settings {
-        val loaded = runCatching {
-            json.decodeFromString<Settings>(settingsFile.readText())
-        }.getOrElse { Settings() }
-
-        // A fresh install has no secret; without one anything on the device
-        // could drive the core through its REST port.
-        return if (loaded.secret.isBlank()) {
-            loaded.copy(secret = randomSecret()).also(::saveSettings)
-        } else {
-            loaded
-        }
+    fun loadState(): SavedState = try {
+        val existing = stateFile.read()
+        val legacy = existing ?: SavedState(
+            if (settingsFile.exists()) json.decodeFromString<Settings>(settingsFile.readText()) else Settings(),
+            if (profilesFile.exists()) json.decodeFromString<ProfileList>(profilesFile.readText()).items else emptyList(),
+        )
+        val loaded = if (legacy.settings.secret.isBlank()) {
+            legacy.copy(settings = legacy.settings.copy(secret = randomSecret()))
+        } else legacy
+        if (existing == null || loaded != existing) stateFile.write(loaded)
+        if (stateFile.recovered) recoveryNotice = "配置文件损坏，已恢复上次有效备份"
+        loaded
+    } catch (error: Exception) {
+        loadFailure = error
+        throw IllegalStateException("本地配置无法读取，原文件已保留，请勿卸载应用", error)
     }
 
-    fun saveSettings(settings: Settings) {
-        runCatching { settingsFile.writeText(json.encodeToString(settings)) }
-    }
-
-    fun loadProfiles(): List<Profile> = runCatching {
-        json.decodeFromString<ProfileList>(profilesFile.readText()).items
-    }.getOrElse { emptyList() }
-
-    fun saveProfiles(items: List<Profile>) {
-        runCatching { profilesFile.writeText(json.encodeToString(ProfileList(items))) }
+    fun saveState(settings: Settings, items: List<Profile>) {
+        check(loadFailure == null) { "本地配置损坏，已暂停写入以保留原数据" }
+        stateFile.write(SavedState(settings, items))
     }
 
     fun profileFile(uid: String): File = File(profilesDir, "$uid.yaml")
@@ -76,9 +76,23 @@ class Store(context: Context) {
 
     /** Avoid needing a working proxy to download the rules needed to start that proxy. */
     fun prepareGeoData() {
+        val revisionFile = File(runtimeDir, "bundled-geodata.json")
+        val previous = runCatching { json.decodeFromString<Map<String, String>>(revisionFile.readText()) }.getOrDefault(emptyMap())
+        val revision = json.decodeFromString<Map<String, String>>(assets.open("geodata/manifest.json").bufferedReader().use { it.readText() })
         for (name in listOf("GeoIP.dat", "GeoSite.dat", "geoip.metadb", "ASN.mmdb")) {
             val target = File(runtimeDir, name)
-            if (target.isFile && target.length() > 0) continue
+            if (target.isFile && target.length() > 0) {
+                if (previous[name] == revision[name]) continue
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                target.inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
+                }
+                val current = digest.digest().joinToString("") { "%02x".format(it) }
+                if (current == revision[name]) continue
+                // Preserve independently updated databases; only replace an older bundled copy.
+                if (previous[name] == null || current != previous[name]) continue
+            }
             val file = android.util.AtomicFile(target)
             val output = file.startWrite()
             try {
@@ -89,6 +103,12 @@ class Store(context: Context) {
                 throw error
             }
         }
+        val marker = android.util.AtomicFile(revisionFile)
+        val stream = marker.startWrite()
+        try {
+            stream.write(json.encodeToString(revision).toByteArray(Charsets.UTF_8))
+            marker.finishWrite(stream)
+        } catch (error: Throwable) { marker.failWrite(stream); throw error }
     }
 
     fun deleteProfileYaml(uid: String) {

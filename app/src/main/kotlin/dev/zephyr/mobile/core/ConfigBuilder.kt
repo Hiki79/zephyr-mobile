@@ -27,7 +27,8 @@ object ConfigBuilder {
         "unified-delay", "tcp-concurrent", "find-process-mode",
         "global-client-fingerprint", "profile", "listeners", "tunnels",
         "interface-name", "routing-mark", "iptables", "external-doh-server",
-        "external-ui-url", "external-ui-name",
+        "external-ui-url", "external-ui-name", "ss-config", "vmess-config", "tuic-server",
+        "ntp", "geo-auto-update",
     )
 
     fun build(profileYaml: String?, settings: Settings): String {
@@ -35,6 +36,7 @@ object ConfigBuilder {
             "当前订阅文件不存在或为空，请更新订阅后重试"
         }
         val root = parseToMap(source)
+        validateProviders(root)
 
         // A method reference would not type-check here: remove returns the old
         // value, and forEach wants Unit.
@@ -49,6 +51,7 @@ object ConfigBuilder {
         root["mode"] = settings.mode
         root["log-level"] = settings.logLevel
         root["allow-lan"] = settings.allowLan
+        root["bind-address"] = if (settings.allowLan) "*" else "127.0.0.1"
         root["ipv6"] = settings.ipv6
         root["unified-delay"] = settings.unifiedDelay
         root["tcp-concurrent"] = true
@@ -68,8 +71,28 @@ object ConfigBuilder {
         if (!hasEnabledDns(root)) {
             root["dns"] = defaultDns(settings.ipv6)
         }
+        // DNS hijacking uses the in-process resolver; no public DNS listener is needed.
+        val dns = (root["dns"] as Map<*, *>).entries
+            .filter { it.key is String }.associate { it.key as String to it.value }.toMutableMap()
+        dns["listen"] = ""
+        root["dns"] = dns
 
         return dump(root)
+    }
+
+    internal fun validateProviders(root: Map<String, Any?>) {
+        for (kind in listOf("proxy-providers", "rule-providers")) {
+            val providers = root[kind] as? Map<*, *> ?: continue
+            for ((name, value) in providers) {
+                val provider = value as? Map<*, *> ?: continue
+                if (provider["type"] == "http") {
+                    val url = runCatching { java.net.URI(provider["url"] as? String ?: "") }.getOrNull()
+                    require(url?.scheme.equals("https", ignoreCase = true) && !url?.host.isNullOrBlank()) {
+                        "$kind 中的 $name 必须使用有效的 HTTPS 地址"
+                    }
+                }
+            }
+        }
     }
 
     internal fun parseToMap(text: String): LinkedHashMap<String, Any?> {

@@ -16,12 +16,12 @@ The app does three things:
 3. Reads the core's status back over its REST API on loopback and draws it.
 
 It has no in-app updater, no analytics, no crash reporting, no cloud service,
-no subscription-conversion service, and no remote scripting. The only request
-it makes to the public internet is the subscription fetch, and that goes to the
-address you entered and nowhere else. Subscriptions must be `https://`: the
-network security config refuses cleartext to every host except `127.0.0.1`,
-where the core's REST API lives, so no code path can leak a subscription body
-over plain HTTP by accident.
+no subscription-conversion service, and no remote scripting. Public internet
+requests go only to the HTTPS subscription address and the HTTPS provider
+addresses referenced by that subscription. Top-level and provider metadata
+downloads reject cleartext HTTP and HTTPS-to-HTTP redirects. The network
+security config also refuses cleartext to every host except `127.0.0.1`, where
+the core's REST API lives.
 
 Permissions requested, in full:
 
@@ -35,7 +35,10 @@ Permissions requested, in full:
 
 No location, camera, storage, contacts, installed-app list, or package install.
 Subscriptions and settings live in the app's private directory and are excluded
-from cloud backup and device transfer.
+from cloud backup and device transfer. Runtime listener settings supplied by a
+subscription are constrained to the Android tunnel: extra Shadowsocks, VMess,
+TUIC and public DNS listeners, NTP, and geo auto-update are disabled by the
+Android bridge.
 
 ## How it is put together
 

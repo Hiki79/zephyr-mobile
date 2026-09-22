@@ -1,11 +1,11 @@
 package dev.zephyr.mobile.core
 
 import dev.zephyr.mobile.data.Profile
-import dev.zephyr.mobile.data.Store
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
 import okhttp3.OkHttpClient
@@ -22,7 +22,9 @@ object Subscription {
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
+        .callTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
+        .followSslRedirects(false)
         .dns(ResilientDns)
         .build()
 
@@ -33,7 +35,9 @@ object Subscription {
      * response off the User-Agent, so it claims to be a Clash client; that
      * string carries no device or install identifier.
      */
-    suspend fun fetch(url: String, uid: String, store: Store, keepName: String? = null): Profile =
+    data class Download(val profile: Profile, val yaml: String)
+
+    suspend fun fetch(url: String, uid: String, keepName: String? = null): Download =
         withContext(Dispatchers.IO) {
             val trimmed = url.trim()
             // A subscription body holds every node's password. Over plain HTTP
@@ -54,11 +58,11 @@ object Subscription {
                 .build()
 
             val (body, headers) = runCatching {
-                client.newCall(request).execute().use { response ->
+                client.newCall(request).readResponse { response ->
                     if (!response.isSuccessful) {
                         throw FetchError("订阅服务器返回 ${response.code}")
                     }
-                    val text = response.body?.string().orEmpty()
+                    val text = response.body?.boundedText(16L * 1024 * 1024).orEmpty()
                     text to mapOf(
                         "userinfo" to (response.header("subscription-userinfo") ?: ""),
                         "disposition" to (response.header("content-disposition") ?: ""),
@@ -67,6 +71,7 @@ object Subscription {
                 }
             }.getOrElse { error ->
                 throw when (error) {
+                    is CancellationException -> error
                     is FetchError -> error
                     is UnknownHostException -> FetchError(
                         "域名解析失败：本机 DNS 和加密 DNS 都查不到 ${request.url.host}，检查订阅地址或换个网络",
@@ -80,10 +85,8 @@ object Subscription {
                 throw FetchError("订阅配置无效：${it.message}")
             }
 
-            store.writeProfileYaml(uid, body)
-
             val info = parseUserInfo(headers["userinfo"].orEmpty())
-            Profile(
+            Download(Profile(
                 uid = uid,
                 name = keepName?.takeIf { it.isNotBlank() }
                     ?: parseFileName(headers["disposition"].orEmpty())
@@ -96,7 +99,7 @@ object Subscription {
                 expire = info["expire"] ?: 0,
                 home = headers["profile-web"]?.takeIf { it.isNotBlank() },
                 nodeCount = preview.nodeCount,
-            )
+            ), body)
         }
 
     /** `upload=1; download=2; total=3; expire=4` on the subscription-userinfo header. */
@@ -160,6 +163,8 @@ object Subscription {
     private val dohClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .followSslRedirects(false)
         .dns { hostname ->
             dohBootstrap[hostname]?.map(InetAddress::getByName) ?: Dns.SYSTEM.lookup(hostname)
         }

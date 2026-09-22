@@ -62,6 +62,16 @@ import dev.zephyr.mobile.ui.screens.SettingsScreen
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+    override fun onStart() {
+        super.onStart()
+        ZephyrState.setUiVisible(true)
+    }
+
+    override fun onStop() {
+        ZephyrState.setUiVisible(false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ZephyrState.init(applicationContext)
@@ -169,7 +179,7 @@ private fun AppRoot() {
             )
         }
 
-        ToastHost(Modifier.align(Alignment.BottomCenter))
+        dev.zephyr.mobile.ui.MessageHost(Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.navigationBars).padding(bottom = 76.dp))
     }
 }
 
@@ -215,45 +225,6 @@ private fun BottomNav(current: Tab, onSelect: (Tab) -> Unit) {
                         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                         color = if (active) Z.blueDark else Z.muted,
                     )
-                }
-            }
-        }
-    }
-}
-
-/** Short-lived messages, styled like the desktop build's toasts. */
-@Composable
-private fun ToastHost(modifier: Modifier = Modifier) {
-    val visible = remember { mutableStateListOf<Pair<Long, String>>() }
-
-    LaunchedEffect(Unit) {
-        ZephyrState.toasts.collect { message ->
-            visible.add(System.nanoTime() to message)
-            if (visible.size > 3) visible.removeAt(0)
-        }
-    }
-
-    LaunchedEffect(visible.size) {
-        if (visible.isEmpty()) return@LaunchedEffect
-        delay(3000)
-        if (visible.isNotEmpty()) visible.removeAt(0)
-    }
-
-    Column(
-        modifier = modifier
-            .windowInsetsPadding(WindowInsets.navigationBars)
-            .padding(bottom = 76.dp, start = 16.dp, end = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        visible.forEach { (id, message) ->
-            key(id) {
-                Row(
-                    modifier = Modifier
-                        .background(Z.ink, RoundedCornerShape(Z.radiusSm))
-                        .padding(horizontal = 13.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(message, fontSize = 12.5.sp, color = Color.White, lineHeight = 17.sp)
                 }
             }
         }

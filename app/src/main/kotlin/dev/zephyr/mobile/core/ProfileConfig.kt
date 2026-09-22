@@ -8,6 +8,7 @@ object ProfileConfig {
 
     fun parse(text: String): Preview {
         val root = ConfigBuilder.parseToMap(text)
+        ConfigBuilder.validateProviders(root)
         require(root["proxies"] is List<*> || root["proxy-providers"] is Map<*, *>) {
             "订阅缺少 proxies 或 proxy-providers 节点配置"
         }

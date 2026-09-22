@@ -11,7 +11,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,13 +27,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +53,7 @@ import dev.zephyr.mobile.ui.ZButton
 import dev.zephyr.mobile.ui.ZIcon
 import dev.zephyr.mobile.ui.ZTextField
 import dev.zephyr.mobile.ui.ZephyrTheme
+import dev.zephyr.mobile.ui.GroupSelector
 import dev.zephyr.mobile.ui.nodeMeta
 
 /**
@@ -66,12 +65,27 @@ import dev.zephyr.mobile.ui.nodeMeta
  */
 class TileProxyActivity : ComponentActivity() {
 
+    override fun onStart() {
+        super.onStart()
+        ZephyrState.setUiVisible(true)
+    }
+
+    override fun onStop() {
+        ZephyrState.setUiVisible(false)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ZephyrState.init(applicationContext)
         setFinishOnTouchOutside(true)
         setContent {
-            ZephyrTheme { TileProxySheet(onClose = ::finish) }
+            ZephyrTheme {
+                Box {
+                    TileProxySheet(onClose = ::finish)
+                    dev.zephyr.mobile.ui.MessageHost(Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp))
+                }
+            }
         }
         window?.apply {
             setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT)
@@ -88,13 +102,14 @@ class TileProxyActivity : ComponentActivity() {
 @Composable
 private fun TileProxySheet(onClose: () -> Unit) {
     val context = LocalContext.current
-    val proxies by ZephyrState.proxies.collectAsState()
-    val status by ZephyrState.status.collectAsState()
-    val settings by ZephyrState.settings.collectAsState()
-    val profiles by ZephyrState.profiles.collectAsState()
-    val currentProfile = profiles.find { it.uid == settings.currentProfile }
+    val proxies by ZephyrState.proxies.collectAsStateWithLifecycle()
+    val status by ZephyrState.status.collectAsStateWithLifecycle()
+    val settings by ZephyrState.settings.collectAsStateWithLifecycle()
+    val profiles by ZephyrState.profiles.collectAsStateWithLifecycle()
+    val displayedSettings = status.runtimeSettings ?: settings
+    val currentProfile = profiles.find { it.uid == displayedSettings.currentProfile }
 
-    val groups = remember(proxies, settings.mode) { selectGroups(proxies, settings.mode) }
+    val groups = remember(proxies, displayedSettings.mode) { selectGroups(proxies, displayedSettings.mode) }
     var activeName by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
     var testing by remember { mutableStateOf(false) }
@@ -150,7 +165,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
                 Text("切换节点", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = Z.ink)
                 Text(
                     when (status.stage) {
-                        CoreStage.RUNNING -> "${currentProfile?.name ?: "当前订阅"} · ${groups.size} 个策略组"
+                        CoreStage.RUNNING -> "${status.profileName ?: currentProfile?.name ?: "当前订阅"} · ${groups.size} 个策略组"
                         CoreStage.STARTING -> "正在连接…"
                         CoreStage.FAILED -> status.lastError?.take(24) ?: "连接失败"
                         CoreStage.STOPPED -> "${currentProfile?.name ?: "未选择订阅"} · 未连接"
@@ -161,7 +176,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (status.running && switchable && active != null) {
+            if (status.running && active != null) {
                 ZButton(
                     if (testing) "测速中" else "测速",
                     onClick = {
@@ -187,6 +202,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
             }
         }
 
+        dev.zephyr.mobile.ui.SessionNotice(Modifier.padding(bottom = 8.dp))
         when {
             groups.isEmpty() -> {
                 Column(
@@ -218,20 +234,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
             }
 
             else -> {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                ) {
-                    groups.forEach { group ->
-                        SheetGroupChip(
-                            group = group,
-                            selected = group.name == activeName,
-                            onClick = { activeName = group.name },
-                        )
-                    }
-                }
+                GroupSelector(groups, proxies, activeName) { activeName = it; query = "" }
 
                 Spacer(Modifier.height(10.dp))
                 ZTextField(
@@ -299,7 +302,8 @@ private fun TileProxySheet(onClose: () -> Unit) {
                         }
                     }
                     Text(
-                        "显示 ${nodes.size} / ${active?.all?.size ?: 0} 个节点 · 点按即可切换",
+                        "显示 ${nodes.size} / ${active?.all?.size ?: 0} 个节点 · " +
+                            if (!status.running) "连接后可切换" else if (switchable) "点按即可切换" else "此策略组由内核自动选择",
                         fontSize = 11.5.sp,
                         color = Z.faint,
                         modifier = Modifier.padding(top = 8.dp),
@@ -307,33 +311,6 @@ private fun TileProxySheet(onClose: () -> Unit) {
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun SheetGroupChip(group: ProxyItem, selected: Boolean, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .background(if (selected) Z.bluePale else Z.card, RoundedCornerShape(Z.radiusSm))
-            .border(1.dp, if (selected) Z.blueLine else Z.line, RoundedCornerShape(Z.radiusSm))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 7.dp),
-    ) {
-        Text(
-            group.name,
-            fontSize = 12.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = if (selected) Z.blueDark else Z.ink,
-            maxLines = 1,
-        )
-        Text(
-            group.now ?: group.type,
-            fontSize = 10.5.sp,
-            color = Z.muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.width(130.dp),
-        )
     }
 }
 
