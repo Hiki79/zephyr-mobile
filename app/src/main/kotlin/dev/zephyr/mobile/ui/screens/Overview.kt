@@ -29,6 +29,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -40,7 +42,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.zephyr.mobile.TileProxyActivity
 import dev.zephyr.mobile.ZephyrState
+import dev.zephyr.mobile.finalExit
+import dev.zephyr.mobile.layoutGroups
 import dev.zephyr.mobile.data.CoreStage
 import dev.zephyr.mobile.data.ProxyItem
 import dev.zephyr.mobile.data.TrafficSample
@@ -53,6 +58,8 @@ import dev.zephyr.mobile.ui.DelayPill
 import dev.zephyr.mobile.ui.EmptyState
 import dev.zephyr.mobile.ui.HairLine
 import dev.zephyr.mobile.ui.KickerStyle
+import dev.zephyr.mobile.ui.MultiplierBadge
+import dev.zephyr.mobile.ui.multiplierOf
 import dev.zephyr.mobile.ui.PageHeader
 import dev.zephyr.mobile.ui.SectionLabel
 import dev.zephyr.mobile.ui.Segmented
@@ -89,10 +96,14 @@ fun OverviewScreen(
 
     val groups = remember(proxies, displayedSettings.mode) { selectGroups(proxies, displayedSettings.mode) }
     val pinned = settings.pinnedGroups
-    val summary = remember(groups, pinned) {
-        if (pinned.isEmpty()) groups.take(DEFAULT_SUMMARY) else groups.filter { it.name in pinned }
+    // By default the groups that decide the exit, not the first few service groups.
+    val summary = remember(groups, proxies, pinned) {
+        if (pinned.isEmpty()) layoutGroups(groups, proxies, null).primary.take(DEFAULT_SUMMARY)
+        else groups.filter { it.name in pinned }
     }
     val currentProfile = profiles.find { it.uid == displayedSettings.currentProfile }
+    val context = LocalContext.current
+    val exit = remember(proxies, groups) { finalExit(proxies, groups.firstOrNull()?.now) }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth().padding(horizontal = Z.gutter),
@@ -118,7 +129,19 @@ fun OverviewScreen(
             )
         }
 
-        item { HeroCard(traffic, status.stage, displayedSettings.mixedPort) }
+        item {
+            HeroCard(
+                traffic = traffic,
+                stage = status.stage,
+                exitLine = when {
+                    status.stage != CoreStage.RUNNING -> null
+                    displayedSettings.mode == "direct" -> "直连模式 · 全部流量不走代理"
+                    else -> exit?.name
+                },
+                multiplier = if (displayedSettings.mode == "direct") null else exit?.name?.let(::multiplierOf),
+                onExitClick = { context.startActivity(android.content.Intent(context, TileProxyActivity::class.java)) },
+            )
+        }
 
         item {
             ZCard {
@@ -175,9 +198,9 @@ fun OverviewScreen(
                     title = "策略路由",
                     count = "(${summary.size} / ${groups.size})",
                     description = if (pinned.isEmpty()) {
-                        "点一行换节点 · 现在显示前几个分组，可以自己选"
+                        "点一行打开该分组 · 默认显示决定出口的分组，可以自己选"
                     } else {
-                        "点一行换节点 · 显示的是你选的分组"
+                        "点一行打开该分组 · 显示的是你选的分组"
                     },
                     trailing = {
                         ZButton(
@@ -206,7 +229,10 @@ fun OverviewScreen(
                                 group = group,
                                 chain = resolveChain(proxies, group.now),
                                 latency = groupLatency(proxies, group),
-                                onClick = onNavigateProxies,
+                                onClick = {
+                                    ZephyrState.focusGroup(group.name)
+                                    onNavigateProxies()
+                                },
                             )
                         }
                         CardFoot("全部 ${groups.size} 个分组在节点页") {
@@ -256,9 +282,18 @@ fun OverviewScreen(
 
 // ------------------------------------------------------------------ pieces
 
-/** The one blue slab on the page, carrying the live traffic read-out. */
+/**
+ * The one blue slab on the page, carrying the live traffic read-out and the
+ * node the traffic finally leaves through; tapping that opens the quick picker.
+ */
 @Composable
-private fun HeroCard(traffic: List<TrafficSample>, stage: CoreStage, port: Int) {
+private fun HeroCard(
+    traffic: List<TrafficSample>,
+    stage: CoreStage,
+    exitLine: String?,
+    multiplier: Double?,
+    onExitClick: () -> Unit,
+) {
     val latest = traffic.lastOrNull() ?: TrafficSample()
     val (downValue, downUnit) = splitRate(latest.down)
     val (upValue, upUnit) = splitRate(latest.up)
@@ -303,12 +338,43 @@ private fun HeroCard(traffic: List<TrafficSample>, stage: CoreStage, port: Int) 
         Spacer(Modifier.height(8.dp))
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                if (stage == CoreStage.RUNNING) "混合端口 $port" else "隧道未建立",
-                fontSize = 11.5.sp,
-                color = Color.White.copy(alpha = 0.68f),
-            )
-            Spacer(Modifier.weight(1f))
+            Row(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(Z.radiusSm))
+                    .clickable(enabled = stage == CoreStage.RUNNING, role = Role.Button, onClick = onExitClick)
+                    .padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    when {
+                        exitLine != null -> "出口"
+                        stage == CoreStage.RUNNING -> "正在读取出口"
+                        else -> "隧道未建立"
+                    },
+                    fontSize = 11.5.sp,
+                    color = Color.White.copy(alpha = 0.68f),
+                )
+                if (exitLine != null) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        exitLine,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (multiplier != null) {
+                        Spacer(Modifier.width(6.dp))
+                        MultiplierBadge(multiplier, spelled = true)
+                    }
+                    Spacer(Modifier.width(3.dp))
+                    Icon(ZIcon.ChevronRight, "切换出口", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(12.dp))
+                }
+            }
+            Spacer(Modifier.width(10.dp))
             LegendDot(Color.White, "下行")
             Spacer(Modifier.width(12.dp))
             LegendDot(Color.White.copy(alpha = 0.5f), "上行")

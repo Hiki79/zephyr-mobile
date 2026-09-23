@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.zephyr.mobile.data.ProxyItem
 import dev.zephyr.mobile.groupLatency
+import dev.zephyr.mobile.layoutGroups
 
 /** The full picker stays visible even after scrolling the quick-access row. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,19 +36,44 @@ import dev.zephyr.mobile.groupLatency
 fun GroupSelector(groups: List<ProxyItem>, proxies: Map<String, ProxyItem>, selected: String?, onSelect: (String) -> Unit) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     val rowState = rememberLazyListState()
-    LaunchedEffect(selected, groups.map { it.name }) {
-        val index = groups.indexOfFirst { it.name == selected }
+    // Groups that merely follow another one are summarised rather than listed.
+    val layout = remember(groups, proxies, selected) { layoutGroups(groups, proxies, selected) }
+    val quick = layout.primary
+    LaunchedEffect(selected, quick.map { it.name }) {
+        val index = quick.indexOfFirst { it.name == selected }
         if (index >= 0) rowState.animateScrollToItem(index)
     }
     Column {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("策略分组 · ${groups.size}", color = Z.muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(
+                if (layout.folded > 0) "出口分组 · ${quick.size} / ${groups.size}" else "策略分组 · ${groups.size}",
+                color = Z.muted, fontSize = 12.sp, modifier = Modifier.weight(1f),
+            )
             ZButton("全部分组", onClick = { expanded = true }, icon = ZIcon.ListChecks, small = true)
         }
         Spacer(Modifier.height(8.dp))
         LazyRow(state = rowState, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.selectableGroup()) {
-            items(groups, key = { it.name }) { group ->
+            items(quick, key = { it.name }) { group ->
                 GroupChoice(group, proxies, group.name == selected, { onSelect(group.name) }, Modifier.width(146.dp))
+            }
+        }
+        if (layout.folded > 0) {
+            Row(
+                Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Z.radiusSm))
+                    .background(Z.hover)
+                    .clickable(role = Role.Button) { expanded = true }
+                    .padding(horizontal = 11.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "另有 " + layout.summary(),
+                    fontSize = 12.sp, color = Z.muted, lineHeight = 16.sp, modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(6.dp))
+                Icon(ZIcon.ChevronRight, "查看全部分组", tint = Z.muted, modifier = Modifier.size(13.dp))
             }
         }
     }
@@ -70,8 +96,8 @@ fun GroupSelector(groups: List<ProxyItem>, proxies: Map<String, ProxyItem>, sele
                     IconButton(onClick = { expanded = false }) { Icon(ZIcon.Close, "关闭分组选择") }
                 }
                 Spacer(Modifier.height(12.dp))
-                ZTextField(query, { query = it }, "搜索分组，例如 香港、自动选择", leading = ZIcon.Search,
-                    rounded = true, modifier = Modifier.fillMaxWidth())
+                ZTextField(query, { query = it }, "搜索分组，例如 油管、自动选择", leading = ZIcon.Search,
+                    rounded = true, modifier = Modifier.fillMaxWidth(), clearable = true)
                 Spacer(Modifier.height(12.dp))
                 if (filtered.isEmpty()) {
                     Text("没有匹配的分组", color = Z.muted, modifier = Modifier.padding(vertical = 24.dp))
@@ -112,7 +138,7 @@ private fun GroupChoice(group: ProxyItem, proxies: Map<String, ProxyItem>, selec
             if (selected) Icon(ZIcon.Check, "当前分组", tint = Z.blue, modifier = Modifier.size(15.dp))
         }
         Spacer(Modifier.height(4.dp))
-        Text(group.now ?: group.type, fontSize = 11.sp, color = Z.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(group.now?.let { "→ $it" } ?: group.type, fontSize = 11.sp, color = Z.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(5.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("${group.all?.size ?: 0} 个节点", fontSize = 10.5.sp, color = Z.faint, modifier = Modifier.weight(1f))

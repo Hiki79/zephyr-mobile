@@ -56,6 +56,12 @@ class ClashApi(private val port: Int, private val secret: String) {
                 }
         }
 
+    /** /proxies alone runs to a few hundred KB; decode it off the main thread. */
+    private suspend inline fun <reified T> getJson(path: String, readTimeoutSeconds: Long = DEFAULT_READ_TIMEOUT): T {
+        val body = text(path, readTimeoutSeconds)
+        return withContext(Dispatchers.Default) { json.decodeFromString<T>(body) }
+    }
+
     private suspend fun send(path: String, method: String, body: String?): Boolean =
         withContext(Dispatchers.IO) {
                 val payload = (body ?: "").toRequestBody(JSON_MEDIA)
@@ -78,7 +84,7 @@ class ClashApi(private val port: Int, private val secret: String) {
     }
 
     suspend fun proxies(): Map<String, ProxyItem> {
-        return json.decodeFromString<ProxiesResponse>(text("/proxies")).proxies
+        return getJson<ProxiesResponse>("/proxies").proxies
     }
 
     suspend fun selectNode(group: String, node: String): Boolean =
@@ -87,15 +93,15 @@ class ClashApi(private val port: Int, private val secret: String) {
     /** Tests a whole group at once; the core returns a name to latency map. */
     suspend fun groupDelay(group: String, testUrl: String, timeoutMillis: Int = 5000): Map<String, Int> {
         val path = "/group/${encode(group)}/delay?timeout=$timeoutMillis&url=${encode(testUrl)}"
-        return json.decodeFromString(text(path, readTimeoutSeconds = (timeoutMillis / 1000L) + 20))
+        return getJson(path, readTimeoutSeconds = (timeoutMillis / 1000L) + 20)
     }
 
     suspend fun rules(): List<Rule> {
-        return json.decodeFromString<RulesResponse>(text("/rules")).rules
+        return getJson<RulesResponse>("/rules").rules
     }
 
     suspend fun connections(): ConnectionsResponse {
-        return json.decodeFromString(text("/connections"))
+        return getJson("/connections")
     }
 
     suspend fun closeConnection(id: String): Boolean =

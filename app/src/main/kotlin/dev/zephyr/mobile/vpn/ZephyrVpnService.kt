@@ -160,8 +160,9 @@ class ZephyrVpnService : VpnService() {
             ZephyrState.pushLog("内核已启动", LogLevel.INFO)
             goForeground(
                 getString(R.string.notif_connected),
+                // The profile this session runs, not whichever is picked for next time.
                 ZephyrState.profiles.value
-                    .find { it.uid == ZephyrState.settings.value.currentProfile }
+                    .find { it.uid == settings.currentProfile }
                     ?.name,
             )
         }

@@ -85,7 +85,7 @@ fun SettingsScreen(
     ) {
         item {
             PageHeader(
-                kicker = "07 / SETTINGS",
+                kicker = "05 / SETTINGS",
                 title = "设置",
                 subtitle = "端口与网络行为的改动需要重新连接，模式切换不用",
             )
@@ -160,6 +160,17 @@ fun SettingsScreen(
                             onChange = { next ->
                                 ZephyrState.updateSettings(transform = { it.copy(unifiedDelay = next) }, onSaved = ::needsReconnect)
                             },
+                        )
+                    },
+                )
+                HairLine()
+                SettingRow(
+                    title = "切换节点时断开旧连接",
+                    description = "只断开经过该分组的连接，视频和下载会立刻改走新节点",
+                    trailing = {
+                        ZSwitch(
+                            checked = settings.closeOnSwitch,
+                            onChange = { next -> ZephyrState.updateSettings(transform = { it.copy(closeOnSwitch = next) }) },
                         )
                     },
                 )

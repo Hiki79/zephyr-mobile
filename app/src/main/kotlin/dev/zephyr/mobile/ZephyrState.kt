@@ -3,6 +3,7 @@ package dev.zephyr.mobile
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.SystemClock
 import dev.zephyr.mobile.core.ClashApi
 import dev.zephyr.mobile.core.Subscription
 import dev.zephyr.mobile.core.ProfileConfig
@@ -28,12 +29,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
@@ -90,8 +91,23 @@ object ZephyrState {
     private val _memory = MutableStateFlow(0L)
     val memory: StateFlow<Long> = _memory.asStateFlow()
 
-    private val _toasts = MutableSharedFlow<String>(extraBufferCapacity = 8)
-    val toasts: SharedFlow<String> = _toasts.asSharedFlow()
+    /**
+     * A notice raised while no screen is in front (the tile opening the app,
+     * say) waits here until one is; the timestamp lets a stale one be dropped.
+     */
+    class Notice(val text: String, val at: Long)
+
+    private val _toasts = Channel<Notice>(capacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val toasts: Flow<Notice> = _toasts.receiveAsFlow()
+
+    /** The group the node lists show, shared by the app and the tile panel. */
+    private val _focusedGroup = MutableStateFlow<String?>(null)
+    val focusedGroup: StateFlow<String?> = _focusedGroup.asStateFlow()
+
+    data class NodeListPrefs(val hideTimeouts: Boolean = false, val byLatency: Boolean = false)
+
+    private val _nodePrefs = MutableStateFlow(NodeListPrefs())
+    val nodePrefs: StateFlow<NodeListPrefs> = _nodePrefs.asStateFlow()
 
     // Touched from the main thread and from the service's IO coroutine, so
     // every access goes through the lock below.
@@ -122,6 +138,7 @@ object ZephyrState {
         }
         refreshLocalProxies()
         notifyTile()
+        if (loaded) scope.launch { pruneProfileFiles() }
     }
 
     fun api(): ClashApi = (_status.value.runtimeSettings ?: _settings.value).let { ClashApi(it.ctrlPort, it.secret) }
@@ -143,7 +160,22 @@ object ZephyrState {
     }
 
     fun toast(message: String) {
-        _toasts.tryEmit(message)
+        _toasts.trySend(Notice(message, SystemClock.elapsedRealtime()))
+    }
+
+    fun focusGroup(name: String) {
+        _focusedGroup.value = name
+    }
+
+    fun updateNodePrefs(transform: (NodeListPrefs) -> NodeListPrefs) {
+        _nodePrefs.update(transform)
+    }
+
+    /** Old revisions and deleted subscriptions hold node passwords; keep only what a restore needs. */
+    private suspend fun pruneProfileFiles(drop: Set<String> = emptySet()) {
+        dataLock.withLock {
+            withContext(Dispatchers.IO) { runCatching { store.pruneProfileFiles(_profiles.value, drop) } }
+        }
     }
 
     fun setUiVisible(visible: Boolean) {
@@ -336,7 +368,7 @@ object ZephyrState {
         }
         pollJobs += pollVisible("节点", _uiVisible, 6_000) { _proxies.value = controller.proxies() }
         pollJobs += pollVisible("连接", _uiVisible, 3_000) { _connections.value = controller.connections() }
-        pollJobs += pollVisible("规则", _uiVisible, 30_000) { _rules.value = controller.rules() }
+        // Rules only change with the config; the rules page fetches them when opened.
         // Lightweight health check remains active when every screen is closed.
         pollJobs += scope.launch {
             while (isActive) {
@@ -391,7 +423,7 @@ object ZephyrState {
 
     // ------------------------------------------------------------ proxies
 
-    fun selectNode(group: String, node: String) {
+    fun selectNode(group: String, node: String, announce: String? = null) {
         if (!_status.value.running) { toast("连接后可切换节点"); return }
         val expected = session
         val controller = api()
@@ -402,9 +434,38 @@ object ZephyrState {
                     check(controller.selectNode(group, node)) { "控制接口拒绝切换" }
                     val result = controller.proxies()
                     if (expected == session && _status.value.running) _proxies.value = result
+                    announce?.let(::toast)
+                    if (_settings.value.closeOnSwitch) scope.launch { closeGroupConnections(controller, group) }
                 }
             }
         }
+    }
+
+    /**
+     * mihomo keeps existing connections on the node they started on, so a
+     * video or download would carry on through the old one. Only connections
+     * whose chain passes through the switched group are dropped.
+     */
+    private suspend fun closeGroupConnections(controller: ClashApi, group: String) {
+        try {
+            controller.connections().connections.orEmpty()
+                .filter { group in it.chains }
+                .forEach { controller.closeConnection(it.id) }
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { }
+    }
+
+    /** Switches [group] to its fastest measured node that costs no more than 1x. */
+    fun selectFastest(group: String) {
+        if (!_status.value.running) { toast("连接后可切换节点"); return }
+        val item = _proxies.value[group] ?: return
+        val best = fastestNode(_proxies.value, item)
+        if (best == null) {
+            toast("还没有可用的测速结果，先点测速；高倍率和信息节点不参与")
+            return
+        }
+        if (item.now == best.name) { toast("当前已是最快的 ${best.name}"); return }
+        selectNode(group, best.name, announce = "已切到 ${best.name} · ${best.latency} ms")
     }
 
     fun testGroup(group: String, onDone: () -> Unit = {}) {
@@ -463,6 +524,7 @@ object ZephyrState {
                         throw error
                     }
                 }
+                pruneProfileFiles()
                 toast("${download.profile.name} 已更新" + if (_status.value.runtimeSettings?.currentProfile == uid) "，重新连接后生效" else "")
                 refreshLocalProxies()
             } } finally { updatingProfiles.remove(uid); onDone() }
@@ -483,12 +545,13 @@ object ZephyrState {
 
     fun deleteProfile(uid: String) {
         scope.launch { attempt("删除失败") {
+            val removed = _profiles.value.find { it.uid == uid }
             dataLock.withLock {
                 val items = _profiles.value.filterNot { it.uid == uid }
                 val next = if (_settings.value.currentProfile == uid) _settings.value.copy(currentProfile = items.firstOrNull()?.uid) else _settings.value
                 persist(next, items)
-                // Revision files are retained for last-good-state recovery. They stay private.
             }
+            pruneProfileFiles(drop = setOfNotNull(uid, removed?.configId))
             refreshLocalProxies()
             notifyTile()
             toast("订阅已删除" + if (_status.value.runtimeSettings?.currentProfile == uid) "，当前会话将在断开时结束" else "")
@@ -517,10 +580,10 @@ fun selectGroups(proxies: Map<String, ProxyItem>, mode: String = "rule"): List<P
     if (mode == "global" && global != null) return listOf(global)
     val ordered = proxies["GLOBAL"]?.all
         ?.mapNotNull { proxies[it] }
-        ?.filter { it.isGroup }
+        ?.filter { it.isGroup && !it.hidden }
         .orEmpty()
     if (ordered.isNotEmpty()) return ordered
-    return proxies.values.filter { it.isGroup && it.name != "GLOBAL" }
+    return proxies.values.filter { it.isGroup && !it.hidden && it.name != "GLOBAL" }
         .ifEmpty { listOfNotNull(global) }
 }
 

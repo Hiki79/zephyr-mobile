@@ -115,6 +115,22 @@ class Store(context: Context) {
         runCatching { profileFile(uid).delete() }
     }
 
+    /**
+     * Deletes every stored config that neither the current index nor the
+     * backup snapshot points at, so one previous revision survives for a
+     * restore and nothing else lingers. [drop] names files to delete even if
+     * the backup still refers to them: a subscription the user deleted.
+     */
+    fun pruneProfileFiles(current: List<Profile>, drop: Set<String> = emptySet()) {
+        val keep = HashSet<String>()
+        current.forEach { keep += it.configId ?: it.uid }
+        stateFile.readBackup()?.profiles?.forEach { keep += it.configId ?: it.uid }
+        keep -= drop
+        profilesDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.name.endsWith(".yaml") && file.name.removeSuffix(".yaml") !in keep) file.delete()
+        }
+    }
+
     companion object {
         private const val ALPHABET =
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

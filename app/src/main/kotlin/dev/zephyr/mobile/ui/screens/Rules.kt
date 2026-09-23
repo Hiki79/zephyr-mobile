@@ -63,7 +63,7 @@ fun RulesScreen(onBack: () -> Unit) {
     ) {
         item {
             PageHeader(
-                kicker = "05 / RULES",
+                kicker = "RULES",
                 title = "规则",
                 subtitle = "${rules.size} 条 · 自上而下匹配，命中即停",
                 trailing = { ZButton("返回", onClick = onBack, small = true) },
@@ -99,6 +99,7 @@ fun RulesScreen(onBack: () -> Unit) {
                         placeholder = "查找规则，例如 google、DIRECT、GEOSITE",
                         leading = ZIcon.Search,
                         rounded = true,
+                        clearable = true,
                         modifier = Modifier.weight(1f),
                     )
                 }

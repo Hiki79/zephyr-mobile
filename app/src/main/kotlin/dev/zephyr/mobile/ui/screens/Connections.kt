@@ -14,6 +14,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +40,10 @@ import dev.zephyr.mobile.ui.formatBytes
 fun ConnectionsScreen(onBack: () -> Unit) {
     val data by ZephyrState.connections.collectAsStateWithLifecycle()
     val status by ZephyrState.status.collectAsStateWithLifecycle()
-    val list = data.connections.orEmpty().sortedByDescending { it.download + it.upload }
+    // Newest first by start time, which never changes for a live connection:
+    // sorting by traffic reshuffled rows every poll, right under a finger aiming at "关闭".
+    val list = data.connections.orEmpty().sortedByDescending { it.start }
+    var confirmCloseAll by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxWidth().padding(horizontal = Z.gutter),
@@ -45,7 +51,7 @@ fun ConnectionsScreen(onBack: () -> Unit) {
     ) {
         item {
             PageHeader(
-                kicker = "04 / CONNECTIONS",
+                kicker = "CONNECTIONS",
                 title = "连接",
                 subtitle = "${list.size} 条活动连接 · 累计下载 ${formatBytes(data.downloadTotal)}",
                 trailing = {
@@ -54,7 +60,7 @@ fun ConnectionsScreen(onBack: () -> Unit) {
                         Spacer(Modifier.width(7.dp))
                         ZButton(
                             "全部关闭",
-                            onClick = ZephyrState::closeAllConnections,
+                            onClick = { confirmCloseAll = true },
                             danger = true,
                             small = true,
                             enabled = list.isNotEmpty(),
@@ -138,5 +144,18 @@ fun ConnectionsScreen(onBack: () -> Unit) {
         }
 
         item { Spacer(Modifier.height(8.dp)) }
+    }
+
+    if (confirmCloseAll) {
+        ConfirmDialog(
+            title = "关闭全部连接",
+            message = "将断开 ${list.size} 条连接，正在进行的下载、视频和通话会中断，应用通常会自动重连。",
+            confirmText = "全部关闭",
+            onDismiss = { confirmCloseAll = false },
+            onConfirm = {
+                ZephyrState.closeAllConnections()
+                confirmCloseAll = false
+            },
+        )
     }
 }

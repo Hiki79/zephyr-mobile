@@ -39,8 +39,16 @@ object ProfileConfig {
                 "load-balance" -> "LoadBalance"
                 else -> raw
             }
-            // Selection and provider expansion are authoritative only once the core runs.
-            result[name] = ProxyItem(name = name, type = type, all = members.distinct())
+            // Selection and provider expansion are authoritative only once the core
+            // runs; until then a selector points at its first member, as mihomo's does.
+            val distinct = members.distinct()
+            result[name] = ProxyItem(
+                name = name,
+                type = type,
+                now = if (type == "Selector") distinct.firstOrNull() else null,
+                all = distinct,
+                hidden = group["hidden"] == true,
+            )
             name
         }
         result["GLOBAL"] = ProxyItem(name = "GLOBAL", type = "Selector", all = (groupNames + nodes + "DIRECT").distinct())

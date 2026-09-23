@@ -25,7 +25,7 @@ class ProfileConfigTest {
         val preview = ProfileConfig.parse(config)
         assertEquals(2, preview.nodeCount)
         assertEquals(listOf("香港 01", "日本 02"), preview.proxies["节点选择"]!!.all)
-        assertNull(preview.proxies["节点选择"]!!.now)
+        assertEquals("香港 01", preview.proxies["节点选择"]!!.now)
     }
 
     @Test fun nodeOnlySubscriptionRemainsVisible() {

@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -54,7 +55,10 @@ import dev.zephyr.mobile.ui.ZIcon
 import dev.zephyr.mobile.ui.ZTextField
 import dev.zephyr.mobile.ui.ZephyrTheme
 import dev.zephyr.mobile.ui.GroupSelector
-import dev.zephyr.mobile.ui.nodeMeta
+import dev.zephyr.mobile.ui.MultiplierBadge
+import dev.zephyr.mobile.ui.isInfoNode
+import dev.zephyr.mobile.ui.matchesQuery
+import dev.zephyr.mobile.ui.multiplierOf
 
 /**
  * Opened by long-pressing the quick settings tile (the QS_TILE_PREFERENCES
@@ -110,24 +114,25 @@ private fun TileProxySheet(onClose: () -> Unit) {
     val currentProfile = profiles.find { it.uid == displayedSettings.currentProfile }
 
     val groups = remember(proxies, displayedSettings.mode) { selectGroups(proxies, displayedSettings.mode) }
-    var activeName by remember { mutableStateOf<String?>(null) }
+    val focused by ZephyrState.focusedGroup.collectAsStateWithLifecycle()
+    // Opens on whichever group was last looked at, here or in the app.
+    val activeName = focused?.takeIf { name -> groups.any { it.name == name } } ?: groups.firstOrNull()?.name
     var query by remember { mutableStateOf("") }
     var testing by remember { mutableStateOf(false) }
-
-    LaunchedEffect(groups) {
-        if (groups.isEmpty()) {
-            activeName = null
-        } else if (activeName == null || groups.none { it.name == activeName }) {
-            activeName = groups.first().name
-        }
-    }
 
     val active = activeName?.let { proxies[it] }
     val switchable = active?.type.equals("Selector", ignoreCase = true)
 
-    val nodes = remember(active, query) {
-        val needle = query.trim().lowercase()
-        active?.all.orEmpty().filter { needle.isEmpty() || it.lowercase().contains(needle) }
+    // The provider's notices are not servers; the quick panel leaves them out.
+    val nodes = remember(active, proxies, query) {
+        active?.all.orEmpty().filter { name ->
+            matchesQuery(name, query) && (proxies[name]?.isGroup == true || !isInfoNode(name))
+        }
+    }
+    val listState = rememberLazyListState()
+    LaunchedEffect(activeName, nodes.isNotEmpty()) {
+        val index = nodes.indexOf(active?.now)
+        if (index > 0) listState.scrollToItem((index - 1).coerceAtLeast(0))
     }
 
     val vpnPermission = rememberLauncherForActivityResult(
@@ -188,6 +193,10 @@ private fun TileProxySheet(onClose: () -> Unit) {
                     small = true,
                     enabled = !testing,
                 )
+                if (switchable) {
+                    Spacer(Modifier.width(6.dp))
+                    ZButton("选最快", onClick = { activeName?.let(ZephyrState::selectFastest) }, small = true)
+                }
                 Spacer(Modifier.width(8.dp))
             }
             Box(
@@ -234,15 +243,16 @@ private fun TileProxySheet(onClose: () -> Unit) {
             }
 
             else -> {
-                GroupSelector(groups, proxies, activeName) { activeName = it; query = "" }
+                GroupSelector(groups, proxies, activeName) { ZephyrState.focusGroup(it); query = "" }
 
                 Spacer(Modifier.height(10.dp))
                 ZTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = "查找节点，例如 香港、IEPL、0.5x",
+                    placeholder = "查找节点，例如 香港 家宽、0.5x",
                     leading = ZIcon.Search,
                     rounded = true,
+                    clearable = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -286,15 +296,18 @@ private fun TileProxySheet(onClose: () -> Unit) {
                     )
                 } else {
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 380.dp),
                     ) {
                         items(nodes, key = { it }) { node ->
+                            val item = proxies[node]
                             SheetNodeRow(
                                 name = node,
-                                type = proxies[node]?.type ?: "--",
-                                latency = proxies[node]?.latency,
+                                type = if (item?.isGroup == true) "${item.type} → ${item.now ?: "--"}" else item?.type ?: "--",
+                                multiplier = if (item?.isGroup == true) null else multiplierOf(node),
+                                latency = item?.latency,
                                 selected = active?.now == node,
                                 enabled = switchable && status.running,
                                 onClick = { activeName?.let { ZephyrState.selectNode(it, node) } },
@@ -302,7 +315,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
                         }
                     }
                     Text(
-                        "显示 ${nodes.size} / ${active?.all?.size ?: 0} 个节点 · " +
+                        "显示 ${nodes.size} / ${active?.all?.size ?: 0} 项 · " +
                             if (!status.running) "连接后可切换" else if (switchable) "点按即可切换" else "此策略组由内核自动选择",
                         fontSize = 11.5.sp,
                         color = Z.faint,
@@ -318,6 +331,7 @@ private fun TileProxySheet(onClose: () -> Unit) {
 private fun SheetNodeRow(
     name: String,
     type: String,
+    multiplier: Double?,
     latency: Int?,
     selected: Boolean,
     enabled: Boolean,
@@ -343,12 +357,16 @@ private fun SheetNodeRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                nodeMeta(name, type),
+                type,
                 fontSize = 11.sp,
                 color = Z.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (multiplier != null) {
+            Spacer(Modifier.width(8.dp))
+            MultiplierBadge(multiplier)
         }
         Spacer(Modifier.width(10.dp))
         DelayDot(latency)

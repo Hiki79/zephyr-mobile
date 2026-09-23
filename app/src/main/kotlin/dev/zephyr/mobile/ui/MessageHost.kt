@@ -10,12 +10,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.os.SystemClock
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.zephyr.mobile.ZephyrState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+
+private const val STALE_AFTER_MS = 15_000L
 
 /** Both entry points render feedback; only the foreground activity consumes it. */
 @Composable
@@ -25,8 +28,10 @@ fun MessageHost(modifier: Modifier = Modifier) {
     LaunchedEffect(owner) {
         owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             try {
-                ZephyrState.toasts.collectLatest {
-                    message = it
+                ZephyrState.toasts.collectLatest { notice ->
+                    // Held while no screen was in front; past this age it is news no longer.
+                    if (SystemClock.elapsedRealtime() - notice.at > STALE_AFTER_MS) return@collectLatest
+                    message = notice.text
                     delay(4_000)
                     message = null
                 }

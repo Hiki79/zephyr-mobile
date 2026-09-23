@@ -2,6 +2,7 @@ package dev.zephyr.mobile
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -62,6 +63,9 @@ import dev.zephyr.mobile.ui.screens.SettingsScreen
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+    /** Bumped when the tile asks for a connection that needs VPN consent first. */
+    private val connectRequests = mutableStateOf(0)
+
     override fun onStart() {
         super.onStart()
         ZephyrState.setUiVisible(true)
@@ -75,10 +79,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ZephyrState.init(applicationContext)
+        consumeConnectRequest(intent)
         enableEdgeToEdge()
         setContent {
-            ZephyrTheme { AppRoot() }
+            ZephyrTheme { AppRoot(connectRequests.value) }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        consumeConnectRequest(intent)
+    }
+
+    private fun consumeConnectRequest(intent: Intent?) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_CONNECT, false)) return
+        intent.removeExtra(EXTRA_CONNECT)
+        connectRequests.value++
+    }
+
+    companion object {
+        const val EXTRA_CONNECT = "dev.zephyr.mobile.extra.CONNECT"
     }
 }
 
@@ -94,7 +114,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
 private enum class Overlay { NONE, CONNECTIONS, RULES }
 
 @Composable
-private fun AppRoot() {
+private fun AppRoot(connectRequest: Int) {
     val context = LocalContext.current
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var overlay by remember { mutableStateOf(Overlay.NONE) }
@@ -134,6 +154,10 @@ private fun AppRoot() {
         }
         val intent = ZephyrState.vpnPermissionIntent(context)
         if (intent != null) vpnPermission.launch(intent) else ZephyrState.start(context)
+    }
+
+    LaunchedEffect(connectRequest) {
+        if (connectRequest > 0) toggleVpn(true)
     }
 
     BackHandler(enabled = overlay != Overlay.NONE) { overlay = Overlay.NONE }

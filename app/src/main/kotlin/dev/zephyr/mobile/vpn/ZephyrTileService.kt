@@ -12,6 +12,11 @@ import dev.zephyr.mobile.MainActivity
 import dev.zephyr.mobile.R
 import dev.zephyr.mobile.ZephyrState
 import dev.zephyr.mobile.data.CoreStage
+import dev.zephyr.mobile.finalExit
+import dev.zephyr.mobile.selectGroups
+import dev.zephyr.mobile.ui.formatMultiplier
+import dev.zephyr.mobile.ui.multiplierOf
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,10 +41,12 @@ class ZephyrTileService : TileService() {
         val s = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         scope = s
         observeJob = s.launch {
-            ZephyrState.status.collectLatest {
+            ZephyrState.status.combine(ZephyrState.proxies) { status, _ -> status }.collectLatest {
                 updateTileState()
             }
         }
+        // Nothing polls while the app is closed; fetch once so the exit shown is current.
+        if (ZephyrState.status.value.running) ZephyrState.refreshProxies()
         updateTileState()
     }
 
@@ -67,6 +74,8 @@ class ZephyrTileService : TileService() {
         if (permissionIntent != null || !hasProfile) {
             val appIntent = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                // The consent dialog needs an activity; the app asks for it on arrival.
+                if (hasProfile) putExtra(MainActivity.EXTRA_CONNECT, true)
             }
             val launchAction = {
                 openApp(appIntent)
@@ -114,7 +123,7 @@ class ZephyrTileService : TileService() {
             CoreStage.RUNNING -> {
                 tile.state = Tile.STATE_ACTIVE
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = status.profileName ?: getString(R.string.notif_connected)
+                    tile.subtitle = exitSubtitle() ?: status.profileName ?: getString(R.string.notif_connected)
                 }
             }
             CoreStage.STARTING -> {
@@ -137,6 +146,17 @@ class ZephyrTileService : TileService() {
             }
         }
         tile.updateTile()
+    }
+
+    /** The node traffic finally leaves through, with its multiplier when it is costly. */
+    private fun exitSubtitle(): String? {
+        val status = ZephyrState.status.value
+        val mode = status.runtimeSettings?.mode ?: ZephyrState.settings.value.mode
+        if (mode == "direct") return "直连模式"
+        val proxies = ZephyrState.proxies.value
+        val exit = finalExit(proxies, selectGroups(proxies, mode).firstOrNull()?.now) ?: return null
+        val multiplier = multiplierOf(exit.name)?.takeIf { it >= 3 }
+        return (multiplier?.let { formatMultiplier(it) + " " } ?: "") + exit.name.take(18)
     }
 
     companion object {

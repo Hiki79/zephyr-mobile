@@ -30,6 +30,12 @@ class StateFile(private val file: File) {
         }
     }
 
+    /** The previous snapshot, which a restore would bring back; null when unreadable. */
+    @Synchronized
+    fun readBackup(): SavedState? =
+        if (!backup.isFile) null
+        else runCatching { json.decodeFromString<SavedState>(backup.readText()) }.getOrNull()
+
     @Synchronized
     fun write(state: SavedState) {
         val bytes = json.encodeToString(state).toByteArray(Charsets.UTF_8)

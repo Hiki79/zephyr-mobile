@@ -1,6 +1,7 @@
 package dev.zephyr.mobile.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,9 +51,19 @@ fun LogsScreen() {
         }
     }
 
+    // Dragging up to read pauses following; letting go at the bottom resumes it.
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> follow = false
+                is DragInteraction.Stop, is DragInteraction.Cancel -> if (!listState.canScrollForward) follow = true
+            }
+        }
+    }
+
     Column(Modifier.fillMaxWidth().padding(horizontal = Z.gutter)) {
         PageHeader(
-            kicker = "06 / LOGS",
+            kicker = "04 / LOGS",
             title = "日志",
             subtitle = "内核实时输出 · 只保留最近 600 行，不写入文件",
             trailing = {

@@ -126,7 +126,7 @@ fun ProfilesScreen() {
     deleting?.let { profile ->
         ConfirmDialog(
             title = "删除订阅",
-            message = "确定删除「${profile.name}」吗？将从订阅列表移除；上次有效配置会在本机保留一份恢复备份。",
+            message = "确定删除「${profile.name}」吗？订阅和它在本机保存的配置文件（含节点密码）会一起删除。",
             confirmText = "删除",
             onDismiss = { deleting = null },
             onConfirm = {

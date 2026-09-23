@@ -23,6 +23,8 @@ data class Settings(
     val currentProfile: String? = null,
     /** Groups the overview's routing card shows; empty means the first few. */
     val pinnedGroups: List<String> = emptyList(),
+    /** Drop a group's live connections when its node changes, so they move over. */
+    val closeOnSwitch: Boolean = true,
 )
 
 /** One subscription. The traffic counters come from the provider's own header. */
@@ -57,6 +59,8 @@ data class ProxyItem(
     val now: String? = null,
     val all: List<String>? = null,
     val udp: Boolean = false,
+    /** A subscription can mark helper groups `hidden: true` to keep them off the list. */
+    val hidden: Boolean = false,
     val history: List<DelayHistory> = emptyList(),
 ) {
     val isGroup: Boolean get() = all != null

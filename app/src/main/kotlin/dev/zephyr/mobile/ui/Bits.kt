@@ -355,6 +355,7 @@ fun ZTextField(
     singleLine: Boolean = true,
     rounded: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    clearable: Boolean = false,
 ) {
     val shape = RoundedCornerShape(if (rounded) 999.dp else Z.radiusSm)
     Row(
@@ -389,6 +390,44 @@ fun ZTextField(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        if (clearable && value.isNotEmpty()) {
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable(role = Role.Button) { onValueChange("") },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(ZIcon.Close, "清空", tint = Z.muted, modifier = Modifier.size(12.dp))
+            }
+        }
+    }
+}
+
+/**
+ * The traffic multiplier written into a node's name. Anything at 3x or above
+ * is red: on a metered plan it quietly spends quota several times as fast.
+ */
+@Composable
+fun MultiplierBadge(multiplier: Double?, modifier: Modifier = Modifier, spelled: Boolean = false) {
+    if (multiplier == null) return
+    val (fill, ink) = when {
+        multiplier >= 3 -> Color(0xFFFFE4E4) to Z.red
+        multiplier > 1 -> Color(0xFFFFEFD6) to Color(0xFFB5701A)
+        multiplier < 1 -> Color(0xFFE3F4EA) to Z.green
+        else -> Color(0xFFF1F2F5) to Z.muted
+    }
+    Box(
+        modifier
+            .background(fill, RoundedCornerShape(4.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        Text(
+            formatMultiplier(multiplier) + if (spelled && multiplier >= 3) " 高倍率" else "",
+            style = MonoSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+            color = ink,
+            maxLines = 1,
+        )
     }
 }
 
